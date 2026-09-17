@@ -12,7 +12,7 @@ const DOC_TYPE_OPTIONS = [
 
 const todayISO = () => new Date().toISOString().split('T')[0];
 
-export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClose, onUploadSuccess }) {
+export default function DocumentUploadModal({ selectedMsn, selectedFolder, minIssueDate, onClose, onUploadSuccess }) {
   const [file, setFile] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [docNumber, setDocNumber] = useState('');
@@ -55,8 +55,16 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
     });
   };
 
+  // Can't back-date before the MSN's latest issue, since DIN columns run chronologically.
+  // No prior issue means no lower bound; a stray future date in the data clamps to today so
+  // the picker can't end up with min > max.
+  const earliestSelectable = !minIssueDate
+    ? undefined
+    : (minIssueDate < todayISO() ? minIssueDate : todayISO());
+
   const isEntryValid = file && docNumber.trim() && docType && revisionNumber.trim() && description.trim()
-    && issueDate && issueDate <= todayISO();
+    && issueDate && issueDate <= todayISO()
+    && (!earliestSelectable || issueDate >= earliestSelectable);
 
   const resetEntryFields = () => {
     setFile(null);
@@ -368,10 +376,16 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
                     type="date"
                     className="modal-input"
                     value={issueDate}
+                    min={earliestSelectable}
                     max={todayISO()}
                     onChange={(e) => setIssueDate(e.target.value)}
                     disabled={uploading}
                   />
+                  {minIssueDate && minIssueDate < todayISO() && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      Latest issue for this MSN is {minIssueDate} — earlier dates can't be selected.
+                    </div>
+                  )}
                 </div>
 
                 {/* Add Another Document */}

@@ -369,7 +369,7 @@ export async function getFolderDocuments(folderPath) {
 
   const folderPathClean = encodeURIComponent(folderPath).replace(/%2F/g, '/');
   // Query Files in folder and expand ListItemAllFields to get custom column metadata (MSN Number)
-  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/GetFolderByServerRelativeUrl('${folderPathClean}')/Files?$select=Name,ServerRelativeUrl,TimeCreated,TimeLastModified,Length,ListItemAllFields/MSNNumber,ListItemAllFields/MSN_x0020_Number,ListItemAllFields/MSN,ListItemAllFields/Title,ListItemAllFields/Document_x0020_Number,ListItemAllFields/Document_x0020_Type,ListItemAllFields/Record_x0020_of_x0020_revisions&$expand=ListItemAllFields`;
+  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/GetFolderByServerRelativeUrl('${folderPathClean}')/Files?$select=Name,ServerRelativeUrl,TimeCreated,TimeLastModified,Length,ListItemAllFields/MSNNumber,ListItemAllFields/MSN_x0020_Number,ListItemAllFields/MSN,ListItemAllFields/Title,ListItemAllFields/Document_x0020_Number,ListItemAllFields/Document_x0020_Type,ListItemAllFields/Record_x0020_of_x0020_revisions,ListItemAllFields/CustomDate&$expand=ListItemAllFields`;
 
   console.log(`🌐 [Backend API] Querying Documents in Folder: GET ${endpoint}`);
   const spRes = await fetch(endpoint, {
@@ -397,6 +397,7 @@ export async function getFolderDocuments(folderPath) {
         DocNumber: item.Document_x0020_Number || '',
         DocType: item.Document_x0020_Type || '',
         RevisionNumber: item.Record_x0020_of_x0020_revisions || '',
+        CustomDate: item.CustomDate || null,
         RawFields: item // Useful for debugging field names
       };
     });

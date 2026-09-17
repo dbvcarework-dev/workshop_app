@@ -106,6 +106,19 @@ export default function MsnDocumentList({
     latestUploadDate.getTime() > latestDinDate.getTime()
   );
 
+  // The DIN's issue columns are chronological, so a new document can't be issued before the
+  // latest issue already recorded. This mirrors the flow's own coalesce(CustomDate, Created)
+  // and compares the UTC date portion, which is what formatDateTime() buckets columns by.
+  const issueDateOf = (doc) => {
+    const raw = doc.CustomDate || doc.TimeCreated || doc.TimeLastModified;
+    return raw ? String(raw).slice(0, 10) : null;
+  };
+
+  const latestIssueDate = documents.reduce((latest, doc) => {
+    const date = issueDateOf(doc);
+    return date && (!latest || date > latest) ? date : latest;
+  }, null);
+
   const getFileIcon = (fileName) => {
     const ext = fileName.split('.').pop().toLowerCase();
     switch (ext) {
@@ -484,6 +497,7 @@ export default function MsnDocumentList({
         <DocumentUploadModal
           selectedMsn={selectedMsn}
           selectedFolder={selectedFolder}
+          minIssueDate={latestIssueDate}
           onClose={() => setUploadModalOpen(false)}
           onUploadSuccess={handleRefreshDocsWithDin}
         />
