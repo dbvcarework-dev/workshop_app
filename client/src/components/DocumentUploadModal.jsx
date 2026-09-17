@@ -12,6 +12,11 @@ const DOC_TYPE_OPTIONS = [
 
 const todayISO = () => new Date().toISOString().split('T')[0];
 
+// TEMPORARY: allows back-dating to any past date (any month/year) for historical backfill,
+// bypassing the "can't be earlier than the MSN's latest issue" rule below.
+// Set back to true to restore the normal constraint once the backfill is done.
+const ENFORCE_MIN_ISSUE_DATE = false;
+
 export default function DocumentUploadModal({ selectedMsn, selectedFolder, minIssueDate, onClose, onUploadSuccess }) {
   const [file, setFile] = useState(null);
   const [dragOver, setDragOver] = useState(false);
@@ -57,8 +62,9 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, minIs
 
   // Can't back-date before the MSN's latest issue, since DIN columns run chronologically.
   // No prior issue means no lower bound; a stray future date in the data clamps to today so
-  // the picker can't end up with min > max.
-  const earliestSelectable = !minIssueDate
+  // the picker can't end up with min > max. Disabled entirely while ENFORCE_MIN_ISSUE_DATE
+  // is false (see the temporary backfill toggle above).
+  const earliestSelectable = !ENFORCE_MIN_ISSUE_DATE || !minIssueDate
     ? undefined
     : (minIssueDate < todayISO() ? minIssueDate : todayISO());
 
@@ -381,9 +387,14 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, minIs
                     onChange={(e) => setIssueDate(e.target.value)}
                     disabled={uploading}
                   />
-                  {minIssueDate && minIssueDate < todayISO() && (
+                  {ENFORCE_MIN_ISSUE_DATE && minIssueDate && minIssueDate < todayISO() && (
                     <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
                       Latest issue for this MSN is {minIssueDate} — earlier dates can't be selected.
+                    </div>
+                  )}
+                  {!ENFORCE_MIN_ISSUE_DATE && (
+                    <div style={{ fontSize: '11px', color: '#b45309', marginTop: '4px' }}>
+                      ⚠ Temporary: back-dating to any past date is allowed for backfill.
                     </div>
                   )}
                 </div>

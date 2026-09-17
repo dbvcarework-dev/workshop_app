@@ -106,6 +106,13 @@ export default function MsnDocumentList({
     latestUploadDate.getTime() > latestDinDate.getTime()
   );
 
+  // No DIN has ever been generated for this MSN at all (e.g. a brand-new project's first
+  // upload) — isDinStale can't cover this since it requires an existing DIN to compare
+  // against. Gated on !loadingPdf so the banner doesn't flash before the initial fetch
+  // (which 404s and is silently caught) resolves.
+  const hasNeverGeneratedDin = Boolean(latestUploadDate && !latestDinDate && !loadingPdf);
+  const needsDinGeneration = isDinStale || hasNeverGeneratedDin;
+
   // The DIN's issue columns are chronological, so a new document can't be issued before the
   // latest issue already recorded. This mirrors the flow's own coalesce(CustomDate, Created)
   // and compares the UTC date portion, which is what formatDateTime() buckets columns by.
@@ -271,8 +278,8 @@ export default function MsnDocumentList({
         )}
       </div>
 
-      {/* 2. Outdated DIN Warning Banner */}
-      {isDinStale && (
+      {/* 2. Outdated / Never-Generated DIN Warning Banner */}
+      {needsDinGeneration && (
         <div style={{
           marginBottom: '18px',
           backgroundColor: '#fef2f2',
@@ -302,10 +309,14 @@ export default function MsnDocumentList({
             </div>
             <div>
               <div style={{ fontSize: '13px', fontWeight: '700', color: '#991b1b' }}>
-                New Document Detected — DIN Needs Regeneration
+                {hasNeverGeneratedDin
+                  ? 'No DIN Generated Yet'
+                  : 'New Document Detected — DIN Needs Regeneration'}
               </div>
               <div style={{ fontSize: '12px', color: '#b91c1c', marginTop: '2px', lineHeight: '1.4' }}>
-                A document uploaded on <strong>{latestUploadDate ? latestUploadDate.toLocaleString() : 'N/A'}</strong> is newer than your last DIN generated on <strong>{latestDinDate ? latestDinDate.toLocaleString() : 'N/A'}</strong>.
+                {hasNeverGeneratedDin
+                  ? <>A document was uploaded on <strong>{latestUploadDate.toLocaleString()}</strong>, but no DIN has been generated for this MSN yet.</>
+                  : <>A document uploaded on <strong>{latestUploadDate ? latestUploadDate.toLocaleString() : 'N/A'}</strong> is newer than your last DIN generated on <strong>{latestDinDate ? latestDinDate.toLocaleString() : 'N/A'}</strong>.</>}
               </div>
             </div>
           </div>

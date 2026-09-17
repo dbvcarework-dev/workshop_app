@@ -771,7 +771,7 @@ export async function getProjectFolders() {
   const accessToken = await getAccessToken(spScope);
 
   const folderPathClean = encodeURIComponent(DOCUMENT_LIBRARY_PATH).replace(/%2F/g, '/');
-  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/GetFolderByServerRelativeUrl('${folderPathClean}')/Folders?$select=Name,ServerRelativeUrl,ItemCount&$filter=Name ne 'Forms'`;
+  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/GetFolderByServerRelativeUrl('${folderPathClean}')/Folders?$select=Name,ServerRelativeUrl,ItemCount,ListItemAllFields/MSN_x0020_Number&$expand=ListItemAllFields&$filter=Name ne 'Forms'`;
 
   console.log(`🌐 [Backend API] Querying SharePoint: GET ${endpoint}`);
   const spRes = await fetch(endpoint, {
@@ -784,7 +784,22 @@ export async function getProjectFolders() {
 
   if (spRes.ok) {
     const spData = await spRes.json();
-    return spData.value || [];
+    const folders = spData.value || [];
+    return folders.map(folder => {
+      const rawMsnList = folder.ListItemAllFields?.MSN_x0020_Number || '';
+      // Pre-assigned MSN numbers for this project, so a brand-new project with zero
+      // documents still lets a user pick an MSN to upload its first document against.
+      const AssignedMsnNumbers = rawMsnList
+        .split(',')
+        .map(msn => msn.trim())
+        .filter(Boolean);
+      return {
+        Name: folder.Name,
+        ServerRelativeUrl: folder.ServerRelativeUrl,
+        ItemCount: folder.ItemCount,
+        AssignedMsnNumbers,
+      };
+    });
   } else {
     const errText = await spRes.text();
     throw new Error(`SharePoint API HTTP ${spRes.status}: ${errText}`);

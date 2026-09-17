@@ -137,7 +137,11 @@ export default function App() {
           return acc;
         }, {});
 
-        const msnKeys = Object.keys(grouped);
+        // Fall back to the folder's pre-assigned MSN numbers so a brand-new project
+        // (zero documents) still defaults to a selectable MSN instead of none at all.
+        const msnKeys = Object.keys(grouped).length > 0
+          ? Object.keys(grouped)
+          : (selectedFolder.AssignedMsnNumbers || []);
         if (msnKeys.length > 0) {
           setSelectedMsn(msnKeys[0]);
         } else {
@@ -156,13 +160,19 @@ export default function App() {
     fetchDocuments(false);
   }, [selectedFolder]);
 
-  // Group documents by MSN
+  // Group documents by MSN, then seed in any MSN numbers pre-assigned to this project
+  // (via the folder's MSN Number column) that don't have documents yet — otherwise a
+  // brand-new project has no MSN to select and no way to upload its first document.
   const groupedByMsn = documents.reduce((acc, doc) => {
     const msnKey = doc.MSNNumber && doc.MSNNumber !== 'N/A' ? doc.MSNNumber : 'Unassigned / No MSN';
     if (!acc[msnKey]) acc[msnKey] = [];
     acc[msnKey].push(doc);
     return acc;
   }, {});
+
+  for (const msn of selectedFolder?.AssignedMsnNumbers || []) {
+    if (!groupedByMsn[msn]) groupedByMsn[msn] = [];
+  }
 
   // Documents for selected MSN
   const docsForSelectedMsn = selectedMsn ? (groupedByMsn[selectedMsn] || []) : [];
