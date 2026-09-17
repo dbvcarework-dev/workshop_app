@@ -4,6 +4,9 @@ import ProjectSelector from './components/ProjectSelector.jsx';
 import MsnDocumentList from './components/MsnDocumentList.jsx';
 import './index.css';
 
+// Use the current page host so colleagues can access backend via host IP
+const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
+
 export default function App() {
   const [folders, setFolders] = useState([]);
   const [selectedFolder, setSelectedFolder] = useState(null);
@@ -27,7 +30,7 @@ export default function App() {
     console.log("📌 Stored Selected MSN Number into variable (generatedDinMsn):", msnNumber);
 
     // 1. Create DIN Request item in SharePoint (Status: Pending)
-    const response = await fetch('http://localhost:5000/api/generate-din', {
+    const response = await fetch(`${apiBase}/api/generate-din`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ msnNumber: msnNumber })
@@ -53,7 +56,7 @@ export default function App() {
         attempts++;
         try {
           console.log(` [Status Polling] Checking Power Automate completion (Attempt ${attempts}/${maxAttempts})...`);
-          const statusRes = await fetch(`http://localhost:5000/api/din-status?itemId=${itemId}`);
+          const statusRes = await fetch(`${apiBase}/api/din-status?itemId=${itemId}`);
           if (statusRes.ok) {
             const statusData = await statusRes.json();
             if (statusData.Status === 'Completed') {
@@ -82,7 +85,7 @@ export default function App() {
     setError(null);
 
     try {
-      const response = await fetch('http://localhost:5000/api/projects');
+      const response = await fetch(`${apiBase}/api/projects`);
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
         throw new Error(errData.error || `Server HTTP ${response.status}`);
@@ -116,7 +119,7 @@ export default function App() {
     setDocError(null);
     try {
       const encUrl = encodeURIComponent(selectedFolder.ServerRelativeUrl);
-      const res = await fetch(`http://localhost:5000/api/documents?folderUrl=${encUrl}`);
+      const res = await fetch(`${apiBase}/api/documents?folderUrl=${encUrl}`);
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || `HTTP ${res.status}`);

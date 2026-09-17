@@ -226,8 +226,35 @@ const server = http.createServer(async (req, res) => {
       }
     });
   } else { 
-    res.writeHead(404, { 'Content-Type': 'application/json' }); 
-    res.end(JSON.stringify({ error: 'Endpoint Not Found' })); 
+    // Diagnostic endpoint: GET /api/diagnostic
+    if (parsedUrl.pathname === '/api/diagnostic' && req.method === 'GET') {
+      const requesterIp = req.socket && (req.socket.remoteAddress || req.headers['x-forwarded-for']) || 'unknown';
+      const payload = {
+        ok: true,
+        serverTime: new Date().toISOString(),
+        requesterIp,
+        method: req.method,
+        headers: {
+          host: req.headers.host,
+          origin: req.headers.origin || null,
+          'user-agent': req.headers['user-agent'] || null,
+        },
+        availableEndpoints: [
+          '/api/projects',
+          '/api/documents?folderUrl=...',
+          '/api/din-pdf?msnNumber=...',
+          '/api/generate-din',
+          '/api/upload-document',
+          '/api/din-status?itemId=...'
+        ]
+      };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(payload, null, 2));
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Endpoint Not Found' }));
   } 
 }); 
  

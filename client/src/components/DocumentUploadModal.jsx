@@ -1,5 +1,8 @@
 import React, { useState, useRef } from 'react';
 
+// Use current host so uploads target the backend on the server machine
+const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
+
 const DOC_TYPE_OPTIONS = [
   'DRAWINGS (DWG)',
   'TECHNICAL DELIVERY CONDITION (TDC)',
@@ -81,7 +84,7 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
   const uploadOneDocument = async (doc) => {
     const base64Data = await fileToBase64(doc.file);
 
-    const response = await fetch('http://localhost:5000/api/upload-document', {
+    const response = await fetch(`${apiBase}/api/upload-document`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

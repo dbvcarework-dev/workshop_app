@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
+const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
+
 export default function SendDinEmailModal({ selectedMsn, onClose }) {
   const [rows, setRows] = useState([]); // [{ docType, department }]
   const [loadingRows, setLoadingRows] = useState(true);
@@ -12,7 +14,7 @@ export default function SendDinEmailModal({ selectedMsn, onClose }) {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('http://localhost:5000/api/document-type-departments');
+        const res = await fetch(`${apiBase}/api/document-type-departments`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         setRows(data);
@@ -40,7 +42,7 @@ export default function SendDinEmailModal({ selectedMsn, onClose }) {
         attempts++;
         try {
           setStatusMessage(`Waiting for email to be sent... (${attempts * 3}s)`);
-          const statusRes = await fetch(`http://localhost:5000/api/din-email-status?itemId=${itemId}`);
+          const statusRes = await fetch(`${apiBase}/api/din-email-status?itemId=${itemId}`);
           if (statusRes.ok) {
             const statusData = await statusRes.json();
             if (statusData.Status === 'Sent') {
@@ -75,7 +77,7 @@ export default function SendDinEmailModal({ selectedMsn, onClose }) {
     setStatusMessage('Creating email request...');
 
     try {
-      const response = await fetch('http://localhost:5000/api/send-din-email', {
+      const response = await fetch(`${apiBase}/api/send-din-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ msnNumber: selectedMsn, documentTypes: selectedDocTypes }),

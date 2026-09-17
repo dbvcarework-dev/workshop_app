@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import DocumentUploadModal from './DocumentUploadModal';
 import SendDinEmailModal from './SendDinEmailModal';
 
+const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
+
 export default function MsnDocumentList({
   selectedMsn,
   selectedFolder,
@@ -147,7 +149,7 @@ export default function MsnDocumentList({
     setLoadingPdf(true);
     setPdfError(null);
     try {
-      const res = await fetch(`http://localhost:5000/api/din-pdf?msnNumber=${encodeURIComponent(targetMsn)}`);
+      const res = await fetch(`${apiBase}/api/din-pdf?msnNumber=${encodeURIComponent(targetMsn)}`);
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || `HTTP ${res.status}`);
