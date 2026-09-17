@@ -710,6 +710,113 @@ body {
   gap: 18px;
 }
 
+/* Wide, landscape variant used by the multi-document upload modal */
+.modal-container-wide {
+  max-width: 860px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-container-wide > form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.modal-body-landscape {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.modal-columns {
+  display: flex;
+  gap: 24px;
+  align-items: stretch;
+}
+
+.modal-column-left {
+  flex: 1 1 55%;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.modal-column-right {
+  flex: 1 1 45%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding-left: 24px;
+  border-left: 0.5px solid var(--border-color);
+}
+
+.modal-column-right-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  padding: 16px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.modal-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.modal-queue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 0.5px solid var(--border-color);
+  background-color: var(--bg-hover);
+  font-size: 12px;
+}
+
+.modal-queue-item-name {
+  font-weight: 600;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-queue-item-meta {
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+@media (max-width: 700px) {
+  .modal-container-wide {
+    max-width: 100%;
+  }
+
+  .modal-columns {
+    flex-direction: column;
+  }
+
+  .modal-column-right {
+    padding-left: 0;
+    border-left: none;
+    border-top: 0.5px solid var(--border-color);
+    padding-top: 18px;
+  }
+}
+
 /* Destination read-only fields row */
 .modal-readonly-row {
   display: grid;

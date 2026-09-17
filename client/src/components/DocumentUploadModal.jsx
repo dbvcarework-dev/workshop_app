@@ -2,10 +2,12 @@ import React, { useState, useRef } from 'react';
 
 const DOC_TYPE_OPTIONS = [
   'DRAWINGS (DWG)',
-  'TECHNICAL DELIEVRY CONDITION (TDC)',
-  'DEISGN CHANGE REQUEST (DCR)',
+  'TECHNICAL DELIVERY CONDITION (TDC)',
+  'DESIGN CHANGE REQUEST (DCR)',
   'REVISION CHANGE LOG (RCL)',
 ];
+
+const todayISO = () => new Date().toISOString().split('T')[0];
 
 export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClose, onUploadSuccess }) {
   const [file, setFile] = useState(null);
@@ -13,7 +15,11 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
   const [docNumber, setDocNumber] = useState('');
   const [docType, setDocType] = useState('');
   const [revisionNumber, setRevisionNumber] = useState('');
+  const [description, setDescription] = useState('');
+  const [issueDate, setIssueDate] = useState(todayISO());
+  const [queue, setQueue] = useState([]); // documents already added, waiting to be uploaded
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null); // { current, total }
   const [uploadError, setUploadError] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -46,37 +52,80 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
     });
   };
 
+  const isEntryValid = file && docNumber.trim() && docType && revisionNumber.trim() && description.trim()
+    && issueDate && issueDate <= todayISO();
+
+  const resetEntryFields = () => {
+    setFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    setDocNumber('');
+    setDocType('');
+    setRevisionNumber('');
+    setDescription('');
+    setIssueDate(todayISO());
+  };
+
+  const handleAddAnother = () => {
+    if (!isEntryValid) return;
+    setQueue((prev) => [
+      ...prev,
+      { id: `${Date.now()}-${Math.random()}`, file, docNumber, docType, revisionNumber, description, issueDate },
+    ]);
+    resetEntryFields();
+  };
+
+  const handleRemoveQueued = (id) => {
+    setQueue((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const uploadOneDocument = async (doc) => {
+    const base64Data = await fileToBase64(doc.file);
+
+    const response = await fetch('http://localhost:5000/api/upload-document', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        folderUrl: selectedFolder?.ServerRelativeUrl,
+        fileName: doc.file.name,
+        fileDataBase64: base64Data,
+        docNumber: doc.docNumber,
+        docType: doc.docType,
+        revisionNumber: doc.revisionNumber,
+        description: doc.description,
+        issueDate: doc.issueDate,
+        msnNumber: selectedMsn
+      })
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(errData.error || `HTTP ${response.status}`);
+    }
+
+    return response.json();
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!canSubmit || uploading) return;
+    if (uploading) return;
+
+    // Include the currently-filled-in entry (if valid) without forcing the user to click "Add Another" first
+    const documentsToUpload = isEntryValid
+      ? [...queue, { id: 'current', file, docNumber, docType, revisionNumber, description, issueDate }]
+      : queue;
+
+    if (documentsToUpload.length === 0) return;
 
     setUploading(true);
     setUploadError(null);
 
     try {
-      const base64Data = await fileToBase64(file);
-
-      const response = await fetch('http://localhost:5000/api/upload-document', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          folderUrl: selectedFolder?.ServerRelativeUrl,
-          fileName: file.name,
-          fileDataBase64: base64Data,
-          docNumber: docNumber,
-          docType: docType,
-          revisionNumber: revisionNumber,
-          msnNumber: selectedMsn
-        })
-      });
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP ${response.status}`);
+      for (let i = 0; i < documentsToUpload.length; i++) {
+        setUploadProgress({ current: i + 1, total: documentsToUpload.length });
+        const doc = documentsToUpload[i];
+        const result = await uploadOneDocument(doc);
+        console.log(`✅ Document ${i + 1}/${documentsToUpload.length} upload successful:`, result);
       }
-
-      const result = await response.json();
-      console.log('✅ Document upload successful:', result);
 
       if (onUploadSuccess) {
         await onUploadSuccess();
@@ -87,10 +136,12 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
       setUploadError(err.message || 'Failed to upload document');
     } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   };
 
-  const canSubmit = file && docNumber.trim() && docType && revisionNumber.trim() && !uploading;
+  const totalDocumentCount = queue.length + (isEntryValid ? 1 : 0);
+  const canSubmit = totalDocumentCount > 0 && !uploading;
 
   const dropZoneClass = [
     'modal-dropzone',
@@ -111,7 +162,7 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
 
       {/* Modal */}
       <div
-        className="modal-container"
+        className="modal-container modal-container-wide"
         role="dialog"
         aria-modal="true"
         aria-labelledby="upload-modal-title"
@@ -128,7 +179,7 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
             </div>
             <div>
               <div id="upload-modal-title" className="modal-header-title">Add Document</div>
-              <div className="modal-header-sub">Upload a document to SharePoint</div>
+              <div className="modal-header-sub">Upload one or more documents to SharePoint</div>
             </div>
           </div>
 
@@ -147,7 +198,7 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
 
         {/* Body */}
         <form onSubmit={handleSubmit}>
-          <div className="modal-body">
+          <div className="modal-body modal-body-landscape">
 
             {/* Error Alert */}
             {uploadError && (
@@ -180,113 +231,196 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
               </div>
             </div>
 
-            {/* Drop Zone */}
-            <div
-              className={dropZoneClass}
-              onDragOver={(e) => { e.preventDefault(); if (!uploading) setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={(e) => { if (!uploading) handleDrop(e); }}
-              onClick={() => !file && !uploading && fileInputRef.current?.click()}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                onChange={handleFileChange}
-                disabled={uploading}
-                style={{ display: 'none' }}
-                aria-label="File input"
-              />
-
-              {file ? (
-                <div className="modal-file-preview">
-                  <div className="modal-file-preview-info">
-                    <div className="modal-file-icon">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                        <polyline points="14 2 14 8 20 8" />
-                      </svg>
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div className="modal-file-name">{file.name}</div>
-                      <div className="modal-file-size">{fileSize}</div>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="refresh-btn"
-                    onClick={handleRemoveFile}
+            {/* Two-column layout: form fields on the left, queued documents on the right */}
+            <div className="modal-columns">
+              {/* Left column: entry form */}
+              <div className="modal-column-left">
+                {/* Drop Zone */}
+                <div
+                  className={dropZoneClass}
+                  onDragOver={(e) => { e.preventDefault(); if (!uploading) setDragOver(true); }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => { if (!uploading) handleDrop(e); }}
+                  onClick={() => !file && !uploading && fileInputRef.current?.click()}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    onChange={handleFileChange}
                     disabled={uploading}
-                    style={{ flexShrink: 0, padding: '4px 10px', fontSize: '12px' }}
-                  >
-                    Remove
-                  </button>
+                    style={{ display: 'none' }}
+                    aria-label="File input"
+                  />
+
+                  {file ? (
+                    <div className="modal-file-preview">
+                      <div className="modal-file-preview-info">
+                        <div className="modal-file-icon">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                          </svg>
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <div className="modal-file-name">{file.name}</div>
+                          <div className="modal-file-size">{fileSize}</div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="refresh-btn"
+                        onClick={handleRemoveFile}
+                        disabled={uploading}
+                        style={{ flexShrink: 0, padding: '4px 10px', fontSize: '12px' }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="modal-dropzone-prompt-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                          <polyline points="17 8 12 3 7 8" />
+                          <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                      </div>
+                      <div className="modal-dropzone-prompt-title">
+                        Drop file here or <span>browse</span>
+                      </div>
+                      <div className="modal-dropzone-prompt-sub">PDF, DOCX, XLSX, DWG and more</div>
+                    </>
+                  )}
                 </div>
-              ) : (
-                <>
-                  <div className="modal-dropzone-prompt-icon">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="17 8 12 3 7 8" />
-                      <line x1="12" y1="3" x2="12" y2="15" />
-                    </svg>
+
+                {/* Document Number */}
+                <div>
+                  <label className="modal-field-label">
+                    Document Number <span>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="modal-input"
+                    value={docNumber}
+                    onChange={(e) => setDocNumber(e.target.value)}
+                    placeholder="e.g. DOC-2025-001"
+                    disabled={uploading}
+                  />
+                </div>
+
+                {/* Document Type */}
+                <div>
+                  <label className="modal-field-label">
+                    Document Type <span>*</span>
+                  </label>
+                  <select
+                    className={`modal-select${docType ? '' : ' placeholder'}`}
+                    value={docType}
+                    onChange={(e) => setDocType(e.target.value)}
+                    disabled={uploading}
+                  >
+                    <option value="" disabled>Select a type...</option>
+                    {DOC_TYPE_OPTIONS.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Revision Number */}
+                <div>
+                  <label className="modal-field-label">
+                    Revision Number <span>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="modal-input"
+                    value={revisionNumber}
+                    onChange={(e) => setRevisionNumber(e.target.value)}
+                    placeholder="e.g. R0, R1, R2.."
+                    disabled={uploading}
+                  />
+                </div>
+
+                {/* Document / Drawing Description */}
+                <div>
+                  <label className="modal-field-label">
+                    Document / Drawing Description <span>*</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="modal-input"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="e.g. Assembly drawing for main frame"
+                    disabled={uploading}
+                  />
+                </div>
+
+                {/* Issue Date */}
+                <div>
+                  <label className="modal-field-label">
+                    Issue Date <span>*</span>
+                  </label>
+                  <input
+                    type="date"
+                    className="modal-input"
+                    value={issueDate}
+                    max={todayISO()}
+                    onChange={(e) => setIssueDate(e.target.value)}
+                    disabled={uploading}
+                  />
+                </div>
+
+                {/* Add Another Document */}
+                <button
+                  type="button"
+                  className="refresh-btn"
+                  onClick={handleAddAnother}
+                  disabled={!isEntryValid || uploading}
+                  style={{ alignSelf: 'flex-start' }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                  <span>Add Another Document</span>
+                </button>
+              </div>
+
+              {/* Right column: queued documents */}
+              <div className="modal-column-right">
+                <label className="modal-field-label">
+                  Documents Ready to Upload ({queue.length})
+                </label>
+                {queue.length === 0 ? (
+                  <div className="modal-column-right-empty">
+                    No documents added yet.<br />Fill the form and click "Add Another Document" to queue more than one, or leave it as-is and just click Upload for a single document.
                   </div>
-                  <div className="modal-dropzone-prompt-title">
-                    Drop file here or <span>browse</span>
+                ) : (
+                  <div className="modal-queue-list">
+                    {queue.map((doc) => (
+                      <div key={doc.id} className="modal-queue-item">
+                        <div style={{ minWidth: 0 }}>
+                          <div className="modal-queue-item-name">
+                            {doc.file.name}
+                          </div>
+                          <div className="modal-queue-item-meta">
+                            {doc.docNumber} · {doc.docType} · {doc.revisionNumber} · {doc.issueDate}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="refresh-btn"
+                          onClick={() => handleRemoveQueued(doc.id)}
+                          disabled={uploading}
+                          style={{ flexShrink: 0, padding: '4px 10px', fontSize: '12px' }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                  <div className="modal-dropzone-prompt-sub">PDF, DOCX, XLSX, DWG and more</div>
-                </>
-              )}
-            </div>
-
-            {/* Document Number */}
-            <div>
-              <label className="modal-field-label">
-                Document Number <span>*</span>
-              </label>
-              <input
-                type="text"
-                className="modal-input"
-                value={docNumber}
-                onChange={(e) => setDocNumber(e.target.value)}
-                placeholder="e.g. DOC-2025-001"
-                disabled={uploading}
-                required
-              />
-            </div>
-
-            {/* Document Type */}
-            <div>
-              <label className="modal-field-label">
-                Document Type <span>*</span>
-              </label>
-              <select
-                className={`modal-select${docType ? '' : ' placeholder'}`}
-                value={docType}
-                onChange={(e) => setDocType(e.target.value)}
-                disabled={uploading}
-                required
-              >
-                <option value="" disabled>Select a type...</option>
-                {DOC_TYPE_OPTIONS.map((t) => (
-                  <option key={t} value={t}>{t}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Revision Number */}
-            <div>
-              <label className="modal-field-label">
-                Revision Number <span>*</span>
-              </label>
-              <input
-                type="text"
-                className="modal-input"
-                value={revisionNumber}
-                onChange={(e) => setRevisionNumber(e.target.value)}
-                placeholder="e.g. R0, R1, R2.."
-                disabled={uploading}
-                required
-              />
+                )}
+              </div>
             </div>
           </div>
 
@@ -298,7 +432,7 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
             <button
               type="submit"
               className="generate-din-btn modal-submit-btn"
-              disabled={!canSubmit || uploading}
+              disabled={!canSubmit}
             >
               {uploading ? (
                 <>
@@ -312,7 +446,9 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
                       animation: 'spin 0.6s linear infinite',
                     }}
                   />
-                  <span>Uploading...</span>
+                  <span>
+                    {uploadProgress ? `Uploading ${uploadProgress.current} of ${uploadProgress.total}...` : 'Uploading...'}
+                  </span>
                 </>
               ) : (
                 <>
@@ -321,7 +457,7 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, onClo
                     <polyline points="17 8 12 3 7 8" />
                     <line x1="12" y1="3" x2="12" y2="15" />
                   </svg>
-                  <span>Upload Document</span>
+                  <span>{totalDocumentCount > 1 ? `Upload ${totalDocumentCount} Documents` : 'Upload Document'}</span>
                 </>
               )}
             </button>

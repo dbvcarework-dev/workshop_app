@@ -1,5 +1,5 @@
 import http from 'http';
-import { getProjectFolders, getFolderDocuments, createDinRequest, getLatestDinPdfDataUrl, getDinRequestStatus, uploadDocumentToSharePoint } from './src/services/fetchProjects.js';
+import { getProjectFolders, getFolderDocuments, createDinRequest, getLatestDinPdfDataUrl, getDinRequestStatus, uploadDocumentToSharePoint, getDocumentTypeDepartments, createDinEmailRequest, getDinEmailRequestStatus } from './src/services/fetchProjects.js';
 
 const PORT = 5000;
 
@@ -114,18 +114,88 @@ const server = http.createServer(async (req, res) => {
       } 
     }); 
   }
+  // API endpoint: GET /api/document-type-departments
+  else if (parsedUrl.pathname === '/api/document-type-departments' && req.method === 'GET') {
+    try {
+      const rows = await getDocumentTypeDepartments();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(rows));
+    } catch (err) {
+      console.error("❌ Document Type Departments API Error:", err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+  // API endpoint: POST /api/send-din-email
+  else if (parsedUrl.pathname === '/api/send-din-email' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk.toString(); });
+    req.on('end', async () => {
+      try {
+        const { msnNumber, documentTypes } = JSON.parse(body || '{}');
+        if (!msnNumber || !Array.isArray(documentTypes) || documentTypes.length === 0) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing msnNumber or documentTypes in request body' }));
+          return;
+        }
+
+        console.log(`🌐 Received POST /api/send-din-email for MSN "${msnNumber}" -> document types [${documentTypes.join(', ')}]...`);
+        const result = await createDinEmailRequest(msnNumber, documentTypes);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        console.error("❌ Send DIN Email API Error:", err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+  }
+  // API endpoint: GET /api/din-email-status?itemId=...
+  else if (parsedUrl.pathname === '/api/din-email-status' && req.method === 'GET') {
+    const itemId = parsedUrl.searchParams.get('itemId');
+    if (!itemId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing itemId query parameter' }));
+      return;
+    }
+
+    try {
+      const statusResult = await getDinEmailRequestStatus(itemId);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(statusResult));
+    } catch (err) {
+      console.error("❌ DIN Email Status API Error:", err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
   // API endpoint: POST /api/upload-document
   else if (parsedUrl.pathname === '/api/upload-document' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
     req.on('end', async () => {
       try {
-        const { folderUrl, fileName, fileDataBase64, docNumber, docType, revisionNumber, msnNumber } = JSON.parse(body || '{}');
+        const { folderUrl, fileName, fileDataBase64, docNumber, docType, revisionNumber, description, issueDate, msnNumber } = JSON.parse(body || '{}');
 
         if (!folderUrl || !fileName || !fileDataBase64) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Missing required parameters: folderUrl, fileName, or fileDataBase64' }));
           return;
+        }
+
+        // Guard the issue date server-side, since the date picker's restrictions can be bypassed.
+        // Shape is checked before comparing, otherwise garbage input sorts as a "future" date.
+        if (issueDate) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(issueDate)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Issue date must be in YYYY-MM-DD format' }));
+            return;
+          }
+          if (issueDate > new Date().toISOString().split('T')[0]) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Issue date cannot be in the future' }));
+            return;
+          }
         }
 
         console.log(`🌐 Received POST /api/upload-document for file "${fileName}" in folder "${folderUrl}"...`);
@@ -141,7 +211,9 @@ const server = http.createServer(async (req, res) => {
             msnNumber,
             docNumber,
             docType,
-            revisionNumber
+            revisionNumber,
+            description,
+            issueDate
           }
         });
 

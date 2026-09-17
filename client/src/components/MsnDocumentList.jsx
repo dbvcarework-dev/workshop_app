@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import DocumentUploadModal from './DocumentUploadModal';
+import SendDinEmailModal from './SendDinEmailModal';
 
 export default function MsnDocumentList({
   selectedMsn,
@@ -19,6 +20,7 @@ export default function MsnDocumentList({
   const [pdfError, setPdfError] = useState(null);
   const [generatingDin, setGeneratingDin] = useState(false);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [sendDinModalOpen, setSendDinModalOpen] = useState(false);
 
   // Auto-expand list whenever a new MSN Number is selected & fetch latest DIN PDF info
   useEffect(() => {
@@ -43,7 +45,46 @@ export default function MsnDocumentList({
     );
   }
 
-  const filteredDocs = documents
+  // Parse a revision label like "R3" into a comparable number; falls back to -1 when unrecognized
+  const parseRevision = (revisionNumber) => {
+    const match = String(revisionNumber || '').match(/\d+/);
+    return match ? parseInt(match[0], 10) : -1;
+  };
+
+  // Collapse documents down to only the latest revision per (DocNumber, DocType) group.
+  // Docs without a DocNumber (legacy uploads) are kept as-is since they can't be grouped.
+  const latestRevisionOnly = (docs) => {
+    const groups = new Map();
+    const ungrouped = [];
+
+    for (const doc of docs) {
+      if (!doc.DocNumber) {
+        ungrouped.push(doc);
+        continue;
+      }
+      const key = `${doc.DocNumber}::${doc.DocType}`;
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, doc);
+        continue;
+      }
+
+      const docRev = parseRevision(doc.RevisionNumber);
+      const existingRev = parseRevision(existing.RevisionNumber);
+      const docTime = new Date(doc.TimeCreated || doc.TimeLastModified || 0).getTime();
+      const existingTime = new Date(existing.TimeCreated || existing.TimeLastModified || 0).getTime();
+
+      // Prefer higher revision number; if they tie or can't be parsed, prefer the most recently created
+      const docIsNewer = docRev !== existingRev ? docRev > existingRev : docTime > existingTime;
+      if (docIsNewer) {
+        groups.set(key, doc);
+      }
+    }
+
+    return [...groups.values(), ...ungrouped];
+  };
+
+  const filteredDocs = latestRevisionOnly(documents)
     .filter(doc => doc.Name.toLowerCase().includes(searchQuery.toLowerCase()))
     .sort((a, b) => new Date(b.TimeCreated || b.TimeLastModified || 0) - new Date(a.TimeCreated || a.TimeLastModified || 0));
 
@@ -197,6 +238,22 @@ export default function MsnDocumentList({
             </>
           )}
         </button>
+
+        {/* Send DIN Email Button — only shown once a DIN exists and is not outdated */}
+        {pdfResult && !isDinStale && (
+          <button
+            type="button"
+            className="refresh-btn"
+            onClick={() => setSendDinModalOpen(true)}
+            title="Email the latest DIN to a department"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+              <polyline points="22,6 12,13 2,6" />
+            </svg>
+            <span>Send DIN</span>
+          </button>
+        )}
       </div>
 
       {/* 2. Outdated DIN Warning Banner */}
@@ -385,6 +442,7 @@ export default function MsnDocumentList({
                   <tr>
                     <th>Document Name</th>
                     <th>Path / Reference</th>
+                    <th>Revision</th>
                     <th>Size</th>
                     <th>Created </th>
                   </tr>
@@ -401,6 +459,7 @@ export default function MsnDocumentList({
                       <td>
                         <code className="file-path-code">{doc.ServerRelativeUrl}</code>
                       </td>
+                      <td>{doc.RevisionNumber || 'N/A'}</td>
                       <td>{formatFileSize(doc.Length)}</td>
                       <td>
                         {doc.TimeCreated
@@ -425,6 +484,14 @@ export default function MsnDocumentList({
           selectedFolder={selectedFolder}
           onClose={() => setUploadModalOpen(false)}
           onUploadSuccess={handleRefreshDocsWithDin}
+        />
+      )}
+
+      {/* Send DIN Email Modal */}
+      {sendDinModalOpen && (
+        <SendDinEmailModal
+          selectedMsn={selectedMsn}
+          onClose={() => setSendDinModalOpen(false)}
         />
       )}
     </>

@@ -369,7 +369,7 @@ export async function getFolderDocuments(folderPath) {
 
   const folderPathClean = encodeURIComponent(folderPath).replace(/%2F/g, '/');
   // Query Files in folder and expand ListItemAllFields to get custom column metadata (MSN Number)
-  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/GetFolderByServerRelativeUrl('${folderPathClean}')/Files?$select=Name,ServerRelativeUrl,TimeCreated,TimeLastModified,Length,ListItemAllFields/MSNNumber,ListItemAllFields/MSN_x0020_Number,ListItemAllFields/MSN,ListItemAllFields/Title&$expand=ListItemAllFields`;
+  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/GetFolderByServerRelativeUrl('${folderPathClean}')/Files?$select=Name,ServerRelativeUrl,TimeCreated,TimeLastModified,Length,ListItemAllFields/MSNNumber,ListItemAllFields/MSN_x0020_Number,ListItemAllFields/MSN,ListItemAllFields/Title,ListItemAllFields/Document_x0020_Number,ListItemAllFields/Document_x0020_Type,ListItemAllFields/Record_x0020_of_x0020_revisions&$expand=ListItemAllFields`;
 
   console.log(`🌐 [Backend API] Querying Documents in Folder: GET ${endpoint}`);
   const spRes = await fetch(endpoint, {
@@ -394,6 +394,9 @@ export async function getFolderDocuments(folderPath) {
         TimeCreated: file.TimeCreated || file.TimeLastModified,
         TimeLastModified: file.TimeLastModified,
         MSNNumber: msnNumber,
+        DocNumber: item.Document_x0020_Number || '',
+        DocType: item.Document_x0020_Type || '',
+        RevisionNumber: item.Record_x0020_of_x0020_revisions || '',
         RawFields: item // Useful for debugging field names
       };
     });
@@ -517,6 +520,156 @@ export async function getLatestDinPdfDataUrl(msnNumber) {
   };
 }
 
+// Exported function to list Document Type -> Department rows from the
+// "Users and department configurations" SharePoint list, for the frontend's
+// multi-select checkboxes. Email addresses are resolved server-side only at
+// send time and never exposed here.
+export async function getDocumentTypeDepartments() {
+  validateConfig();
+  const spScope = `https://${SHAREPOINT_DOMAIN}/AllSites.FullControl offline_access User.Read`;
+  const accessToken = await getAccessToken(spScope);
+
+  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/lists/getByTitle('Users and department configurations')/items?$select=Document_x0020_Type,Department`;
+
+  const spRes = await fetch(endpoint, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json;odata=nometadata',
+    },
+  });
+
+  if (!spRes.ok) {
+    const errText = await spRes.text();
+    throw new Error(`SharePoint List API HTTP ${spRes.status}: ${errText}`);
+  }
+
+  const spData = await spRes.json();
+  return (spData.value || []).map(item => ({
+    docType: item.Document_x0020_Type,
+    department: item.Department,
+  }));
+}
+
+// Internal helper: resolve the union of email addresses for a set of selected document types
+// by reading the "Email_x0020_To" column of matching rows in the lookup list.
+async function resolveEmailsForDocumentTypes(documentTypes) {
+  const spScope = `https://${SHAREPOINT_DOMAIN}/AllSites.FullControl offline_access User.Read`;
+  const accessToken = await getAccessToken(spScope);
+
+  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/lists/getByTitle('Users and department configurations')/items?$select=Document_x0020_Type,Department,Email_x0020_To`;
+
+  const spRes = await fetch(endpoint, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json;odata=nometadata',
+    },
+  });
+
+  if (!spRes.ok) {
+    const errText = await spRes.text();
+    throw new Error(`SharePoint List API HTTP ${spRes.status}: ${errText}`);
+  }
+
+  const spData = await spRes.json();
+  const matchingRows = (spData.value || []).filter(item => documentTypes.includes(item.Document_x0020_Type));
+
+  const emailSet = new Set();
+  const departments = new Set();
+  for (const row of matchingRows) {
+    // Department is a multi-value field in this list — normalize to an array either way
+    const rowDepartments = Array.isArray(row.Department) ? row.Department : [row.Department];
+    rowDepartments.filter(Boolean).forEach(dep => departments.add(dep));
+    String(row.Email_x0020_To || '')
+      .split(',')
+      .map(e => e.trim())
+      .filter(Boolean)
+      .forEach(e => emailSet.add(e));
+  }
+
+  return { emails: [...emailSet], departments: [...departments] };
+}
+
+// Exported function to create a new item in SharePoint list "DIN Email Requests".
+// A Standard "When an item is created" flow trigger on this list does the actual
+// SharePoint lookup + Office 365 Outlook send (no Premium HTTP trigger needed).
+export async function createDinEmailRequest(msnNumber, documentTypes) {
+  validateConfig();
+
+  if (!Array.isArray(documentTypes) || documentTypes.length === 0) {
+    throw new Error('At least one document type must be selected');
+  }
+
+  const { emails, departments } = await resolveEmailsForDocumentTypes(documentTypes);
+  if (emails.length === 0) {
+    throw new Error('No email addresses found for the selected document type(s)');
+  }
+
+  const spScope = `https://${SHAREPOINT_DOMAIN}/AllSites.FullControl offline_access User.Read`;
+  const accessToken = await getAccessToken(spScope);
+
+  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/lists/getByTitle('DIN Email Requests')/items`;
+
+  console.log(`🌐 [Backend API] Creating DIN Email Request for MSN "${msnNumber}" -> ${departments.join(', ')} (${emails.join(', ')})...`);
+  const spRes = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json;odata=nometadata',
+      'Content-Type': 'application/json;odata=nometadata',
+    },
+    body: JSON.stringify({
+      Title: msnNumber,
+      Recipients: emails.join('; '),
+      DocumentTypes: documentTypes.join(', '),
+      Status: 'Pending',
+    }),
+  });
+
+  if (!spRes.ok) {
+    const errText = await spRes.text();
+    throw new Error(`SharePoint List API HTTP ${spRes.status}: ${errText}`);
+  }
+
+  const itemData = await spRes.json();
+  return { itemId: itemData.Id, departments, emails };
+}
+
+// Exported function to check status of a DIN Email Request item in SharePoint
+export async function getDinEmailRequestStatus(itemId) {
+  validateConfig();
+  const spScope = `https://${SHAREPOINT_DOMAIN}/AllSites.FullControl offline_access User.Read`;
+  const accessToken = await getAccessToken(spScope);
+
+  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/lists/getByTitle('DIN Email Requests')/items(${itemId})?$select=Id,Title,Status`;
+
+  const spRes = await fetch(endpoint, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json;odata=nometadata',
+    },
+  });
+
+  if (!spRes.ok) {
+    const errText = await spRes.text();
+    throw new Error(`SharePoint List API HTTP ${spRes.status}: ${errText}`);
+  }
+
+  return await spRes.json();
+}
+
+// Convert a "YYYY-MM-DD" date input value to the MM/DD/YYYY format SharePoint's
+// validateUpdateListItem expects. Built by string split rather than Date parsing so
+// the calendar day can't shift by a timezone offset.
+function toSharePointDate(isoDateOnly) {
+  if (!isoDateOnly) return '';
+  const [year, month, day] = String(isoDateOnly).split('-');
+  if (!year || !month || !day) return '';
+  return `${month}/${day}/${year}`;
+}
+
 // Exported function to upload a document binary to SharePoint & tag its column metadata
 export async function uploadDocumentToSharePoint({ folderUrl, fileName, fileBuffer, metadata = {} }) {
   validateConfig();
@@ -559,7 +712,12 @@ export async function uploadDocumentToSharePoint({ folderUrl, fileName, fileBuff
     { FieldName: 'MSN_x0020_Number', FieldValue: String(metadata.msnNumber || '') },
     { FieldName: 'Document_x0020_Number', FieldValue: String(metadata.docNumber || '') },
     { FieldName: 'Document_x0020_Type', FieldValue: String(metadata.docType || '') },
-    { FieldName: 'Record_x0020_of_x0020_revisions', FieldValue: String(metadata.revisionNumber || '') }
+    { FieldName: 'Record_x0020_of_x0020_revisions', FieldValue: String(metadata.revisionNumber || '') },
+    { FieldName: '_ExtendedDescription', FieldValue: String(metadata.description || '') },
+    // validateUpdateListItem rejects ISO 8601 for DateTime fields and wants the site's
+    // locale format (MM/DD/YYYY here). A rejected field discards the whole batch, so a
+    // bad format here silently wipes every other column too.
+    { FieldName: 'CustomDate', FieldValue: toSharePointDate(metadata.issueDate) }
   ];
 
   console.log(`🌐 [Backend API] Step 2: Tagging Column Metadata: POST ${metadataEndpoint}`);
@@ -585,14 +743,17 @@ export async function uploadDocumentToSharePoint({ folderUrl, fileName, fileBuff
   const metadataResult = await metadataRes.json().catch(() => ({}));
   console.log(`📋 SharePoint validateUpdateListItem Results:`, JSON.stringify(metadataResult, null, 2));
 
-  // Check if any field failed
+  // SharePoint returns HTTP 200 even when individual fields are rejected, and a single
+  // rejected field discards the entire update — so this must be treated as a hard failure
+  // rather than a warning, otherwise the upload reports success with blank metadata.
   const itemResults = metadataResult.value || [];
   const errors = itemResults.filter(item => item.HasException);
   if (errors.length > 0) {
-    console.warn(`⚠️ Some metadata fields could not be updated:`, errors.map(e => `${e.FieldName}: ${e.ErrorMessage}`).join(' | '));
-  } else {
-    console.log(`✅ Step 2 Complete: Metadata tagged successfully on SharePoint item!`);
+    const detail = errors.map(e => `${e.FieldName}: ${e.ErrorMessage}`).join(' | ');
+    console.error(`❌ SharePoint rejected metadata fields (no metadata was saved):`, detail);
+    throw new Error(`SharePoint rejected metadata for "${fileName}" — no columns were saved. ${detail}`);
   }
+  console.log(`✅ Step 2 Complete: Metadata tagged successfully on SharePoint item!`);
 
   return {
     success: true,

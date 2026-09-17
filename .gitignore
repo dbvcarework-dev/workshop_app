@@ -26,3 +26,4 @@ dist-ssr
 .token_cache.json
 .env
 
+.flow_inspect/
