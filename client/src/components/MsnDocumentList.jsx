@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import DocumentUploadModal from './DocumentUploadModal';
+import ModifyDocumentModal from './ModifyDocumentModal';
 import SendDinEmailModal from './SendDinEmailModal';
 
 const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
@@ -22,6 +23,7 @@ export default function MsnDocumentList({
   const [pdfError, setPdfError] = useState(null);
   const [generatingDin, setGeneratingDin] = useState(false);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [modifyModalOpen, setModifyModalOpen] = useState(false);
   const [sendDinModalOpen, setSendDinModalOpen] = useState(false);
 
   // Auto-expand list whenever a new MSN Number is selected & fetch latest DIN PDF info
@@ -210,6 +212,19 @@ export default function MsnDocumentList({
             <line x1="12" y1="3" x2="12" y2="15" />
           </svg>
           <span>Add Document</span>
+        </button>
+        {/* Modify Existing Document Button */}
+        <button
+          type="button"
+          className="refresh-btn"
+          onClick={() => setModifyModalOpen(true)}
+          title="Update fields or replace the file of an already-uploaded document"
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+          </svg>
+          <span>Modify Existing Document</span>
         </button>
         {/* View Latest DIN PDF Button */}
         <button
@@ -511,6 +526,18 @@ export default function MsnDocumentList({
           minIssueDate={latestIssueDate}
           onClose={() => setUploadModalOpen(false)}
           onUploadSuccess={handleRefreshDocsWithDin}
+        />
+      )}
+
+      {/* Modify Existing Document Modal */}
+      {modifyModalOpen && (
+        <ModifyDocumentModal
+          selectedMsn={selectedMsn}
+          selectedFolder={selectedFolder}
+          documents={filteredDocs}
+          minIssueDate={latestIssueDate}
+          onClose={() => setModifyModalOpen(false)}
+          onUpdateSuccess={handleRefreshDocsWithDin}
         />
       )}
 

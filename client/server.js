@@ -1,5 +1,5 @@
 import http from 'http';
-import { getProjectFolders, getFolderDocuments, createDinRequest, getLatestDinPdfDataUrl, getDinRequestStatus, uploadDocumentToSharePoint, getDocumentTypeDepartments, createDinEmailRequest, getDinEmailRequestStatus } from './src/services/fetchProjects.js';
+import { getProjectFolders, getFolderDocuments, createDinRequest, getLatestDinPdfDataUrl, getDinRequestStatus, uploadDocumentToSharePoint, updateDocumentMetadata, getDocumentTypeDepartments, createDinEmailRequest, getDinEmailRequestStatus } from './src/services/fetchProjects.js';
 
 const PORT = 5000;
 
@@ -245,7 +245,59 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ error: err.message }));
       }
     });
-  } else { 
+  }
+  // API endpoint: POST /api/update-document-metadata
+  else if (parsedUrl.pathname === '/api/update-document-metadata' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk.toString(); });
+    req.on('end', async () => {
+      try {
+        const { folderUrl, fileName, docNumber, docType, revisionNumber, description, issueDate, msnNumber } = JSON.parse(body || '{}');
+
+        if (!folderUrl || !fileName) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing required parameters: folderUrl or fileName' }));
+          return;
+        }
+
+        // Same issue-date guard as /api/upload-document, since this endpoint accepts the same field.
+        if (issueDate) {
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(issueDate)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Issue date must be in YYYY-MM-DD format' }));
+            return;
+          }
+          if (issueDate > new Date().toISOString().split('T')[0]) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Issue date cannot be in the future' }));
+            return;
+          }
+        }
+
+        console.log(`🌐 Received POST /api/update-document-metadata for file "${fileName}" in folder "${folderUrl}"...`);
+
+        const updateResult = await updateDocumentMetadata({
+          folderUrl,
+          fileName,
+          metadata: {
+            msnNumber,
+            docNumber,
+            docType,
+            revisionNumber,
+            description,
+            issueDate
+          }
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(updateResult));
+      } catch (err) {
+        console.error("❌ Document Metadata Update API Error:", err.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+  } else {
     // Diagnostic endpoint: GET /api/diagnostic
     if (parsedUrl.pathname === '/api/diagnostic' && req.method === 'GET') {
       const requesterIp = req.socket && (req.socket.remoteAddress || req.headers['x-forwarded-for']) || 'unknown';

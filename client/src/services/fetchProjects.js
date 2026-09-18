@@ -369,7 +369,7 @@ export async function getFolderDocuments(folderPath) {
 
   const folderPathClean = encodeURIComponent(folderPath).replace(/%2F/g, '/');
   // Query Files in folder and expand ListItemAllFields to get custom column metadata (MSN Number)
-  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/GetFolderByServerRelativeUrl('${folderPathClean}')/Files?$select=Name,ServerRelativeUrl,TimeCreated,TimeLastModified,Length,ListItemAllFields/MSNNumber,ListItemAllFields/MSN_x0020_Number,ListItemAllFields/MSN,ListItemAllFields/Title,ListItemAllFields/Document_x0020_Number,ListItemAllFields/Document_x0020_Type,ListItemAllFields/Record_x0020_of_x0020_revisions,ListItemAllFields/CustomDate&$expand=ListItemAllFields`;
+  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/GetFolderByServerRelativeUrl('${folderPathClean}')/Files?$select=Name,ServerRelativeUrl,TimeCreated,TimeLastModified,Length,ListItemAllFields/MSNNumber,ListItemAllFields/MSN_x0020_Number,ListItemAllFields/MSN,ListItemAllFields/Title,ListItemAllFields/Document_x0020_Number,ListItemAllFields/Document_x0020_Type,ListItemAllFields/Record_x0020_of_x0020_revisions,ListItemAllFields/CustomDate,ListItemAllFields/OData__ExtendedDescription&$expand=ListItemAllFields`;
 
   console.log(`🌐 [Backend API] Querying Documents in Folder: GET ${endpoint}`);
   const spRes = await fetch(endpoint, {
@@ -398,6 +398,7 @@ export async function getFolderDocuments(folderPath) {
         DocType: item.Document_x0020_Type || '',
         RevisionNumber: item.Record_x0020_of_x0020_revisions || '',
         CustomDate: item.CustomDate || null,
+        Description: item.OData__ExtendedDescription || '',
         RawFields: item // Useful for debugging field names
       };
     });
@@ -725,6 +726,64 @@ function toSharePointDate(isoDateOnly) {
   return `${month}/${day}/${year}`;
 }
 
+// Internal helper: tag a file's column metadata via validateUpdateListItem.
+// Shared by uploadDocumentToSharePoint (after a fresh upload) and updateDocumentMetadata
+// (metadata-only, no file upload) so both use one identical code path.
+async function tagDocumentMetadata(accessToken, fileServerPath, fileName, metadata) {
+  const filePathClean = encodeURIComponent(fileServerPath).replace(/%2F/g, '/');
+  const metadataEndpoint = `${SHAREPOINT_SITE_URL}/_api/web/GetFileByServerRelativeUrl('${filePathClean}')/ListItemAllFields/validateUpdateListItem`;
+
+  // Mapping SharePoint Internal Column Names to Metadata
+  const formValues = [
+    { FieldName: 'MSN_x0020_Number', FieldValue: String(metadata.msnNumber || '') },
+    { FieldName: 'Document_x0020_Number', FieldValue: String(metadata.docNumber || '') },
+    { FieldName: 'Document_x0020_Type', FieldValue: String(metadata.docType || '') },
+    { FieldName: 'Record_x0020_of_x0020_revisions', FieldValue: String(metadata.revisionNumber || '') },
+    { FieldName: '_ExtendedDescription', FieldValue: String(metadata.description || '') },
+    // validateUpdateListItem rejects ISO 8601 for DateTime fields and wants the site's
+    // locale format (MM/DD/YYYY here). A rejected field discards the whole batch, so a
+    // bad format here silently wipes every other column too.
+    { FieldName: 'CustomDate', FieldValue: toSharePointDate(metadata.issueDate) }
+  ];
+
+  console.log(`🌐 [Backend API] Tagging Column Metadata: POST ${metadataEndpoint}`);
+  const metadataRes = await fetch(metadataEndpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json;odata=nometadata',
+      Accept: 'application/json;odata=nometadata',
+    },
+    body: JSON.stringify({
+      formValues: formValues,
+      bNewDocumentUpdate: true
+    }),
+  });
+
+  if (!metadataRes.ok) {
+    const errText = await metadataRes.text();
+    console.error(`⚠️ SharePoint Metadata Tagging Error (HTTP ${metadataRes.status}):`, errText);
+    throw new Error(`SharePoint Metadata Tagging Failed: HTTP ${metadataRes.status} - ${errText}`);
+  }
+
+  const metadataResult = await metadataRes.json().catch(() => ({}));
+  console.log(`📋 SharePoint validateUpdateListItem Results:`, JSON.stringify(metadataResult, null, 2));
+
+  // SharePoint returns HTTP 200 even when individual fields are rejected, and a single
+  // rejected field discards the entire update — so this must be treated as a hard failure
+  // rather than a warning, otherwise the caller reports success with blank metadata.
+  const itemResults = metadataResult.value || [];
+  const errors = itemResults.filter(item => item.HasException);
+  if (errors.length > 0) {
+    const detail = errors.map(e => `${e.FieldName}: ${e.ErrorMessage}`).join(' | ');
+    console.error(`❌ SharePoint rejected metadata fields (no metadata was saved):`, detail);
+    throw new Error(`SharePoint rejected metadata for "${fileName}" — no columns were saved. ${detail}`);
+  }
+  console.log(`✅ Metadata tagged successfully on SharePoint item!`);
+
+  return metadataResult;
+}
+
 // Exported function to upload a document binary to SharePoint & tag its column metadata
 export async function uploadDocumentToSharePoint({ folderUrl, fileName, fileBuffer, metadata = {} }) {
   validateConfig();
@@ -759,56 +818,27 @@ export async function uploadDocumentToSharePoint({ folderUrl, fileName, fileBuff
 
   // ──── Phase 2: Tag Column Metadata via validateUpdateListItem ────
   const fileServerPath = fileData.ServerRelativeUrl || `${folderUrl}/${fileName}`;
-  const filePathClean = encodeURIComponent(fileServerPath).replace(/%2F/g, '/');
-  const metadataEndpoint = `${SHAREPOINT_SITE_URL}/_api/web/GetFileByServerRelativeUrl('${filePathClean}')/ListItemAllFields/validateUpdateListItem`;
-
-  // Mapping SharePoint Internal Column Names to Metadata
-  const formValues = [
-    { FieldName: 'MSN_x0020_Number', FieldValue: String(metadata.msnNumber || '') },
-    { FieldName: 'Document_x0020_Number', FieldValue: String(metadata.docNumber || '') },
-    { FieldName: 'Document_x0020_Type', FieldValue: String(metadata.docType || '') },
-    { FieldName: 'Record_x0020_of_x0020_revisions', FieldValue: String(metadata.revisionNumber || '') },
-    { FieldName: '_ExtendedDescription', FieldValue: String(metadata.description || '') },
-    // validateUpdateListItem rejects ISO 8601 for DateTime fields and wants the site's
-    // locale format (MM/DD/YYYY here). A rejected field discards the whole batch, so a
-    // bad format here silently wipes every other column too.
-    { FieldName: 'CustomDate', FieldValue: toSharePointDate(metadata.issueDate) }
-  ];
-
-  console.log(`🌐 [Backend API] Step 2: Tagging Column Metadata: POST ${metadataEndpoint}`);
-  const metadataRes = await fetch(metadataEndpoint, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json;odata=nometadata',
-      Accept: 'application/json;odata=nometadata',
-    },
-    body: JSON.stringify({
-      formValues: formValues,
-      bNewDocumentUpdate: true
-    }),
-  });
-
-  if (!metadataRes.ok) {
-    const errText = await metadataRes.text();
-    console.error(`⚠️ SharePoint Metadata Tagging Error (HTTP ${metadataRes.status}):`, errText);
-    throw new Error(`SharePoint Metadata Tagging Failed: HTTP ${metadataRes.status} - ${errText}`);
-  }
-
-  const metadataResult = await metadataRes.json().catch(() => ({}));
-  console.log(`📋 SharePoint validateUpdateListItem Results:`, JSON.stringify(metadataResult, null, 2));
-
-  // SharePoint returns HTTP 200 even when individual fields are rejected, and a single
-  // rejected field discards the entire update — so this must be treated as a hard failure
-  // rather than a warning, otherwise the upload reports success with blank metadata.
-  const itemResults = metadataResult.value || [];
-  const errors = itemResults.filter(item => item.HasException);
-  if (errors.length > 0) {
-    const detail = errors.map(e => `${e.FieldName}: ${e.ErrorMessage}`).join(' | ');
-    console.error(`❌ SharePoint rejected metadata fields (no metadata was saved):`, detail);
-    throw new Error(`SharePoint rejected metadata for "${fileName}" — no columns were saved. ${detail}`);
-  }
+  const metadataResult = await tagDocumentMetadata(accessToken, fileServerPath, fileName, metadata);
   console.log(`✅ Step 2 Complete: Metadata tagged successfully on SharePoint item!`);
+
+  return {
+    success: true,
+    fileName: fileName,
+    serverRelativeUrl: fileServerPath,
+    metadataResult: metadataResult
+  };
+}
+
+// Exported function to update an existing document's column metadata WITHOUT
+// re-uploading its file content — used when the user only edits fields (e.g. fixing a
+// typo, bumping a revision number) and doesn't attach a new file.
+export async function updateDocumentMetadata({ folderUrl, fileName, metadata = {} }) {
+  validateConfig();
+  const spScope = `https://${SHAREPOINT_DOMAIN}/AllSites.FullControl offline_access User.Read`;
+  const accessToken = await getAccessToken(spScope);
+
+  const fileServerPath = `${folderUrl}/${fileName}`;
+  const metadataResult = await tagDocumentMetadata(accessToken, fileServerPath, fileName, metadata);
 
   return {
     success: true,
