@@ -489,8 +489,23 @@ export async function getLatestDinPdfDataUrl(msnNumber) {
   const files = spData.value || [];
 
   // Filter files matching the MSN Number and sort strictly by TimeCreated descending (newest first)
+  // Normalize MSN and filenames by removing non-alphanumeric characters so
+  // variations like `VCE-FAB-0684/1`, `VCE-FAB-0684-1` or `VCEFAB06841` will match.
+  const normalize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
   const matchingFiles = files
-    .filter(file => file.Name.toLowerCase().includes(msnNumber.toLowerCase()))
+    .filter(file => {
+      const name = file.Name || '';
+      const nameNorm = normalize(name);
+      const msnNorm = normalize(msnNumber);
+
+      // Match if normalized forms include each other, or the raw names/paths contain the msn text
+      return (
+        (msnNorm && nameNorm.includes(msnNorm)) ||
+        (name.toLowerCase().includes(String(msnNumber).toLowerCase())) ||
+        (file.ServerRelativeUrl && file.ServerRelativeUrl.toLowerCase().includes(String(msnNumber).toLowerCase()))
+      );
+    })
     .sort((a, b) => new Date(b.TimeCreated || b.TimeLastModified) - new Date(a.TimeCreated || a.TimeLastModified));
 
   if (matchingFiles.length === 0) {
@@ -519,6 +534,45 @@ export async function getLatestDinPdfDataUrl(msnNumber) {
     timeCreated: latestFile.TimeLastModified,
     dataUrl: `data:application/pdf;base64,${base64}`
   };
+}
+
+// Debug helper: list DIN pdf files and normalized names for an MSN (used by server diagnostic route)
+export async function listDinPdfFiles(msnNumber) {
+  validateConfig();
+  const spScope = `https://${SHAREPOINT_DOMAIN}/AllSites.FullControl offline_access User.Read`;
+  const accessToken = await getAccessToken(spScope);
+
+  const libraryPathClean = encodeURIComponent(`${SITE_PATH}/DIN pdfs`).replace(/%2F/g, '/');
+  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/GetFolderByServerRelativeUrl('${libraryPathClean}')/Files?$select=Name,ServerRelativeUrl,TimeCreated,TimeLastModified,Length`;
+
+  const spRes = await fetch(endpoint, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json;odata=nometadata',
+    },
+  });
+
+  if (!spRes.ok) {
+    const errText = await spRes.text();
+    throw new Error(`SharePoint API HTTP ${spRes.status}: ${errText}`);
+  }
+
+  const spData = await spRes.json();
+  const files = spData.value || [];
+
+  const normalize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const msnNorm = normalize(msnNumber);
+
+  return files.map(f => ({
+    name: f.Name,
+    serverRelativeUrl: f.ServerRelativeUrl,
+    timeCreated: f.TimeCreated || f.TimeLastModified,
+    length: f.Length,
+    nameNormalized: normalize(f.Name),
+    matchesMsnNormalized: msnNorm ? normalize(f.Name).includes(msnNorm) : false,
+    matchesMsnRaw: msnNumber ? (String(f.Name).toLowerCase().includes(String(msnNumber).toLowerCase()) || (f.ServerRelativeUrl || '').toLowerCase().includes(String(msnNumber).toLowerCase())) : false
+  }));
 }
 
 // Exported function to list Document Type -> Department rows from the

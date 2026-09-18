@@ -71,6 +71,26 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: err.message }));
     }
   }
+  // Debug endpoint: list DIN pdf files and match info for an MSN
+  else if (parsedUrl.pathname === '/api/din-pdfs-list' && req.method === 'GET') {
+    const msnNumber = parsedUrl.searchParams.get('msnNumber');
+    if (!msnNumber) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing msnNumber query parameter' }));
+      return;
+    }
+
+    try {
+      console.log(`🌐 Received GET /api/din-pdfs-list for MSN: "${msnNumber}"...`);
+      const rows = await listDinPdfFiles(msnNumber);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(rows, null, 2));
+    } catch (err) {
+      console.error('❌ DIN PDFs List API Error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
   // API endpoint: GET /api/din-status?itemId=...
   else if (parsedUrl.pathname === '/api/din-status' && req.method === 'GET') {
     const itemId = parsedUrl.searchParams.get('itemId');
