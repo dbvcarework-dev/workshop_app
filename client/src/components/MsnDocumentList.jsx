@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import DocumentUploadModal from './DocumentUploadModal';
 import ModifyDocumentModal from './ModifyDocumentModal';
 import SendDinEmailModal from './SendDinEmailModal';
@@ -13,10 +13,11 @@ export default function MsnDocumentList({
   docError,
   searchQuery,
   onGenerateDin,
-  onRefreshDocs
+  onRefreshDocs,
+  preloadedDin
 }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
-  
+
   // PDF Viewer State & DIN Generation Loading State
   const [pdfResult, setPdfResult] = useState(null);
   const [loadingPdf, setLoadingPdf] = useState(false);
@@ -26,16 +27,29 @@ export default function MsnDocumentList({
   const [modifyModalOpen, setModifyModalOpen] = useState(false);
   const [sendDinModalOpen, setSendDinModalOpen] = useState(false);
 
+  // Tracks which MSN's preloadedDin has already been consumed, so navigating away
+  // and back to the same MSN triggers a fresh fetch instead of reusing a stale snapshot.
+  const consumedPreloadMsnRef = useRef(null);
+
   // Auto-expand list whenever a new MSN Number is selected & fetch latest DIN PDF info
   useEffect(() => {
     setIsCollapsed(true);
-    setPdfResult(null);
     setPdfError(null);
     setGeneratingDin(false);
+
+    if (preloadedDin && preloadedDin.msn === selectedMsn && consumedPreloadMsnRef.current !== selectedMsn) {
+      // The parent's fast restore path already fetched this MSN's DIN PDF in parallel —
+      // use it instead of firing a redundant, sequential /api/din-pdf request.
+      consumedPreloadMsnRef.current = selectedMsn;
+      setPdfResult(preloadedDin.data);
+      return;
+    }
+
+    setPdfResult(null);
     if (selectedMsn) {
       handleFetchLatestPdf(selectedMsn);
     }
-  }, [selectedMsn]);
+  }, [selectedMsn, preloadedDin]);
 
   if (!selectedMsn) {
     return (

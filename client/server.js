@@ -1,5 +1,5 @@
 import http from 'http';
-import { getProjectFolders, getFolderDocuments, createDinRequest, getLatestDinPdfDataUrl, getDinRequestStatus, uploadDocumentToSharePoint, updateDocumentMetadata, getDocumentTypeDepartments, createDinEmailRequest, getDinEmailRequestStatus } from './src/services/fetchProjects.js';
+import { getProjectFolders, getFolderDocuments, getRestoreState, createDinRequest, getLatestDinPdfDataUrl, getDinRequestStatus, uploadDocumentToSharePoint, updateDocumentMetadata, getDocumentTypeDepartments, createDinEmailRequest, getDinEmailRequestStatus } from './src/services/fetchProjects.js';
 
 const PORT = 5000;
 
@@ -47,6 +47,29 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify(documents));
     } catch (err) {
       console.error("❌ Documents API Error:", err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+  // API endpoint: GET /api/restore?folder=...&msn=... — fetches the folder list, that
+  // folder's documents, and (if msn is given) that MSN's latest DIN PDF, all in
+  // parallel, for fast page-refresh/URL restoration.
+  else if (parsedUrl.pathname === '/api/restore' && req.method === 'GET') {
+    const folder = parsedUrl.searchParams.get('folder');
+    const msn = parsedUrl.searchParams.get('msn');
+    if (!folder) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing folder query parameter' }));
+      return;
+    }
+
+    try {
+      console.log(`🌐 Received GET /api/restore request for folder: "${folder}"${msn ? `, msn: "${msn}"` : ''}...`);
+      const result = await getRestoreState(folder, msn);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(result));
+    } catch (err) {
+      console.error("❌ Restore API Error:", err.message);
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: err.message }));
     }

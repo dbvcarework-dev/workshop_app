@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Header from './components/Header.jsx';
 import ProjectSelector from './components/ProjectSelector.jsx';
 import MsnDocumentList from './components/MsnDocumentList.jsx';
@@ -6,6 +6,33 @@ import './index.css';
 
 // Use the current page host so colleagues can access backend via host IP
 const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
+
+// Read the currently-selected folder/MSN out of the URL's query string
+function readStateFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    folder: params.get('folder') || null,
+    msn: params.get('msn') || null,
+  };
+}
+
+// Reflect the current selection into the URL, so a refresh (or the browser's
+// back/forward buttons) lands back on the same folder + MSN instead of the default.
+// `replace: true` updates the URL without adding a new history entry — used for the
+// initial mount/restore so that doesn't itself become a back-button stop.
+function writeStateToUrl(folderName, msnNumber, { replace = false } = {}) {
+  const params = new URLSearchParams();
+  if (folderName) params.set('folder', folderName);
+  if (msnNumber) params.set('msn', msnNumber);
+  const query = params.toString();
+  const newUrl = query ? `${window.location.pathname}?${query}` : window.location.pathname;
+  const state = { folder: folderName || null, msn: msnNumber || null };
+  if (replace) {
+    window.history.replaceState(state, '', newUrl);
+  } else {
+    window.history.pushState(state, '', newUrl);
+  }
+}
 
 export default function App() {
   const [folders, setFolders] = useState([]);
@@ -24,6 +51,28 @@ export default function App() {
 
   // Stored DIN MSN Variable State for downstream processing
   const [generatedDinMsn, setGeneratedDinMsn] = useState(null);
+
+  // A DIN PDF pre-fetched by the fast restore path, in parallel with the
+  // folder/documents lookup — passed down so MsnDocumentList doesn't have to make its
+  // own separate, sequential fetch for whatever MSN we're initially landing on.
+  const [preloadedDin, setPreloadedDin] = useState(null);
+
+  // Tracks whether the next fetchDocuments() call should still honor a `msn` value
+  // restored from the URL (either on initial load, or right after a browser
+  // back/forward navigation lands on a different folder). Cleared once consumed so
+  // a later, unrelated folder switch doesn't reapply a stale MSN from the URL.
+  const pendingUrlMsnRef = useRef(readStateFromUrl().msn);
+  // First settle (initial load / restore) updates the URL in place; every later
+  // folder or MSN switch pushes a real history entry so back/forward can step through them.
+  const isFirstUrlSyncRef = useRef(true);
+  // Set right before a popstate handler changes selectedFolder, so the fetchDocuments
+  // run it triggers knows to sync state FROM the URL without also pushing a brand new
+  // history entry on top of the one the browser just navigated to.
+  const suppressNextUrlWriteRef = useRef(false);
+  // Set by the fast restore path once it has already populated documents/selectedMsn
+  // itself, so the useEffect([selectedFolder]) it triggers doesn't redundantly
+  // re-fetch the same documents a second time sequentially.
+  const skipNextDocFetchRef = useRef(false);
 
   const handleGenerateDin = async (msnNumber) => {
     setGeneratedDinMsn(msnNumber);
@@ -93,7 +142,9 @@ export default function App() {
       const data = await response.json();
       setFolders(data);
       if (data.length > 0) {
-        setSelectedFolder(data[0]);
+        const { folder: urlFolderName } = readStateFromUrl();
+        const restoredFolder = urlFolderName ? data.find(f => f.Name === urlFolderName) : null;
+        setSelectedFolder(restoredFolder || data[0]);
       }
     } catch (err) {
       console.error("Fetch Error:", err);
@@ -103,8 +154,90 @@ export default function App() {
     }
   };
 
+  // Groups a folder's documents by MSN — the same logic fetchDocuments uses, extracted
+  // so the fast restore path below can compute the same "default MSN" without waiting
+  // for a second, separate render/effect cycle.
+  const groupDocsByMsn = (docs) =>
+    docs.reduce((acc, doc) => {
+      const msnKey = doc.MSNNumber && doc.MSNNumber !== 'N/A' ? doc.MSNNumber : 'Unassigned / No MSN';
+      if (!acc[msnKey]) acc[msnKey] = [];
+      acc[msnKey].push(doc);
+      return acc;
+    }, {});
+
+  // Fast path for the common "refresh with a folder+msn already in the URL" case: fetches
+  // the folder list AND that folder's documents in parallel (via /api/restore) instead of
+  // the normal sequential fetchProjects() -> fetchDocuments() chain, roughly halving the
+  // round-trip latency. Falls back to the normal sequential flow if the folder name turns
+  // out to be stale (renamed/deleted since the URL was bookmarked).
+  const restoreFromUrl = async (folderName) => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const urlMsn = pendingUrlMsnRef.current;
+      const restoreUrl = `${apiBase}/api/restore?folder=${encodeURIComponent(folderName)}`
+        + (urlMsn ? `&msn=${encodeURIComponent(urlMsn)}` : '');
+      const response = await fetch(restoreUrl);
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Server HTTP ${response.status}`);
+      }
+      const { folders: fetchedFolders, documents: fetchedDocuments, dinPdf } = await response.json();
+      setFolders(fetchedFolders);
+
+      const matchedFolder = fetchedFolders.find(f => f.Name === folderName);
+      if (!matchedFolder || fetchedDocuments === null) {
+        // Stale folder name, or folder list itself came back empty — fall back to the
+        // normal default-folder behavior; the existing useEffect([selectedFolder]) will
+        // fetch that folder's documents the regular sequential way.
+        setSelectedFolder(fetchedFolders[0] || null);
+        return;
+      }
+
+      // Fast path succeeded — populate everything now, and tell the upcoming
+      // useEffect([selectedFolder]) not to redundantly re-fetch these same documents.
+      skipNextDocFetchRef.current = true;
+      setSelectedFolder(matchedFolder);
+      setDocuments(fetchedDocuments);
+
+      const grouped = groupDocsByMsn(fetchedDocuments);
+      const msnKeys = Object.keys(grouped).length > 0
+        ? Object.keys(grouped)
+        : (matchedFolder.AssignedMsnNumbers || []);
+
+      const pendingMsn = pendingUrlMsnRef.current;
+      pendingUrlMsnRef.current = null;
+      const nextMsn = (pendingMsn && msnKeys.includes(pendingMsn))
+        ? pendingMsn
+        : (msnKeys.length > 0 ? msnKeys[0] : null);
+
+      // Only trust the pre-fetched DIN PDF if it was actually fetched for the MSN
+      // we're landing on (it was requested using `pendingMsn`, which may not match
+      // `nextMsn` if that URL value turned out to be invalid for this folder).
+      if (dinPdf && pendingMsn && nextMsn === pendingMsn) {
+        setPreloadedDin({ msn: nextMsn, data: dinPdf });
+      }
+
+      setSelectedMsn(nextMsn);
+      writeStateToUrl(matchedFolder.Name, nextMsn, { replace: true });
+      isFirstUrlSyncRef.current = false;
+    } catch (err) {
+      console.error("Restore Error:", err);
+      // Fall back to the normal path entirely on a hard failure (e.g. backend down).
+      await fetchProjects();
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    fetchProjects();
+    const { folder: urlFolderName } = readStateFromUrl();
+    if (urlFolderName) {
+      restoreFromUrl(urlFolderName);
+    } else {
+      fetchProjects();
+    }
   }, []);
 
   // Fetch Documents inside selected folder
@@ -142,11 +275,25 @@ export default function App() {
         const msnKeys = Object.keys(grouped).length > 0
           ? Object.keys(grouped)
           : (selectedFolder.AssignedMsnNumbers || []);
-        if (msnKeys.length > 0) {
-          setSelectedMsn(msnKeys[0]);
+
+        // Prefer a still-pending MSN restored from the URL (initial load, or a
+        // back/forward navigation that switched folders) if it's actually valid here.
+        const pendingMsn = pendingUrlMsnRef.current;
+        pendingUrlMsnRef.current = null;
+        const nextMsn = (pendingMsn && msnKeys.includes(pendingMsn))
+          ? pendingMsn
+          : (msnKeys.length > 0 ? msnKeys[0] : null);
+
+        setSelectedMsn(nextMsn);
+
+        if (suppressNextUrlWriteRef.current) {
+          // This run exists only to sync React state to a URL the browser's own
+          // back/forward navigation already produced — don't push/replace on top of it.
+          suppressNextUrlWriteRef.current = false;
         } else {
-          setSelectedMsn(null);
+          writeStateToUrl(selectedFolder.Name, nextMsn, { replace: isFirstUrlSyncRef.current });
         }
+        isFirstUrlSyncRef.current = false;
       }
     } catch (err) {
       console.error("Error fetching documents:", err);
@@ -157,6 +304,12 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (skipNextDocFetchRef.current) {
+      // The fast restore path already populated documents/selectedMsn for this
+      // folder — skip the redundant sequential re-fetch.
+      skipNextDocFetchRef.current = false;
+      return;
+    }
     fetchDocuments(false);
   }, [selectedFolder]);
 
@@ -180,7 +333,43 @@ export default function App() {
   const handleSelectFolder = (selectedUrl) => {
     const folderObj = folders.find(f => f.ServerRelativeUrl === selectedUrl);
     setSelectedFolder(folderObj || null);
+    // The new folder's default MSN (and the URL write for it) is settled inside
+    // fetchDocuments once its data loads, so nothing more is needed here.
   };
+
+  // Selecting an MSN directly (folder unchanged) — update the URL immediately since
+  // fetchDocuments won't re-run for this (no folder change to trigger it).
+  const handleSelectMsn = (msn) => {
+    setSelectedMsn(msn);
+    if (selectedFolder) {
+      writeStateToUrl(selectedFolder.Name, msn, { replace: false });
+    }
+  };
+
+  // Support the browser's actual Back/Forward buttons: read whatever folder+msn the
+  // history entry we've landed on holds, and apply it.
+  useEffect(() => {
+    const handlePopState = () => {
+      const { folder: urlFolderName, msn: urlMsn } = readStateFromUrl();
+      if (!urlFolderName || folders.length === 0) return;
+
+      const matchedFolder = folders.find(f => f.Name === urlFolderName);
+      if (!matchedFolder) return;
+
+      if (!selectedFolder || matchedFolder.Name !== selectedFolder.Name) {
+        // Switching folders — let fetchDocuments (triggered by the state change below)
+        // pick up this history entry's MSN once that folder's documents are loaded.
+        pendingUrlMsnRef.current = urlMsn;
+        suppressNextUrlWriteRef.current = true;
+        setSelectedFolder(matchedFolder);
+      } else if (urlMsn && urlMsn !== selectedMsn) {
+        setSelectedMsn(urlMsn);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [folders, selectedFolder, selectedMsn]);
 
   return (
     <div className="explorer-container">
@@ -203,7 +392,7 @@ export default function App() {
           onSelectFolder={handleSelectFolder}
           groupedByMsn={groupedByMsn}
           selectedMsn={selectedMsn}
-          onSelectMsn={setSelectedMsn}
+          onSelectMsn={handleSelectMsn}
           searchQuery={searchQuery}
         />
 
@@ -217,6 +406,7 @@ export default function App() {
           searchQuery={searchQuery}
           onGenerateDin={handleGenerateDin}
           onRefreshDocs={() => fetchDocuments(true)}
+          preloadedDin={preloadedDin}
         />
       </div>
     </div>

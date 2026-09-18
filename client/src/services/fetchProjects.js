@@ -890,6 +890,48 @@ export async function getProjectFolders() {
   }
 }
 
+// Exported function to restore (folder list + one folder's documents) in a single
+// call. A page refresh needs both, but the folder's ServerRelativeUrl is fully
+// predictable from its name (DOCUMENT_LIBRARY_PATH + name) — so instead of waiting
+// for the folder list to resolve before even starting the document fetch, both run
+// in parallel here, cutting the round-trip time roughly in half. If the given
+// folder name turns out to be stale (renamed/deleted since the URL was bookmarked),
+// `documents` comes back null rather than failing the whole request — the caller
+// falls back to the normal sequential flow once it knows the real folder list.
+export async function getRestoreState(folderName, msnNumber) {
+  const guessedFolderUrl = `${DOCUMENT_LIBRARY_PATH}/${folderName}`;
+
+  // The DIN PDF fetch is independent of the folder/document lookup (it's keyed by MSN
+  // number, not by folder), so when the URL already names an MSN too, fetch it in the
+  // same parallel batch instead of waiting for this response before even starting it.
+  const [foldersResult, documentsResult, dinPdfResult] = await Promise.allSettled([
+    getProjectFolders(),
+    getFolderDocuments(guessedFolderUrl),
+    msnNumber ? getLatestDinPdfDataUrl(msnNumber) : Promise.resolve(null),
+  ]);
+
+  if (foldersResult.status === 'rejected') {
+    throw foldersResult.reason;
+  }
+
+  const folders = foldersResult.value;
+  const folderExists = folders.some(f => f.Name === folderName);
+
+  return {
+    folders,
+    // Only trust the pre-fetched documents if the folder genuinely exists in the
+    // current folder list. A stale/deleted folder name doesn't reliably make the
+    // guessed-path query reject — SharePoint can resolve GetFolderByServerRelativeUrl(...)
+    // /Files against a nonexistent folder as an empty list rather than an error, which
+    // would otherwise be mistaken for "a real, empty folder" instead of "stale, fall back."
+    documents: (folderExists && documentsResult.status === 'fulfilled') ? documentsResult.value : null,
+    folderUrl: guessedFolderUrl,
+    // No DIN generated yet for this MSN is a normal, expected outcome (matches the
+    // existing silent-catch behavior elsewhere) — never an error worth surfacing.
+    dinPdf: dinPdfResult.status === 'fulfilled' ? dinPdfResult.value : null,
+  };
+}
+
 // Diagnostic CLI runner
 if (process.argv[1] && process.argv[1].endsWith('fetchProjects.js')) {
   runDiagnostic();
