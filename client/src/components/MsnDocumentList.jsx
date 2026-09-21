@@ -27,6 +27,14 @@ export default function MsnDocumentList({
   const [modifyModalOpen, setModifyModalOpen] = useState(false);
   const [sendDinModalOpen, setSendDinModalOpen] = useState(false);
 
+  // Bumped every time a PDF is (re)loaded, and used as the iframe's `key`. Without this,
+  // re-setting pdfResult to an equal-looking object (same dataUrl) doesn't change the
+  // iframe's `src` prop, so React leaves the existing iframe in place — and if the user
+  // clicked a link inside the embedded PDF and pressed the browser's Back button, that
+  // iframe's own (cross-origin) navigation history is left in a broken state React can't
+  // see or reset. Forcing a fresh iframe element guarantees a clean nested browsing context.
+  const [pdfViewerInstance, setPdfViewerInstance] = useState(0);
+
   // Tracks which MSN's preloadedDin has already been consumed, so navigating away
   // and back to the same MSN triggers a fresh fetch instead of reusing a stale snapshot.
   const consumedPreloadMsnRef = useRef(null);
@@ -42,6 +50,7 @@ export default function MsnDocumentList({
       // use it instead of firing a redundant, sequential /api/din-pdf request.
       consumedPreloadMsnRef.current = selectedMsn;
       setPdfResult(preloadedDin.data);
+      setPdfViewerInstance((n) => n + 1);
       return;
     }
 
@@ -50,6 +59,23 @@ export default function MsnDocumentList({
       handleFetchLatestPdf(selectedMsn);
     }
   }, [selectedMsn, preloadedDin]);
+
+  // Clicking a link inside the embedded PDF navigates the tab away to that SharePoint
+  // document; pressing the browser's Back button then restores our page from Chrome's
+  // back-forward cache (bfcache) instead of a normal reload. That restore bypasses React
+  // entirely, so nothing above re-runs — but Chromium's built-in PDF viewer frequently comes
+  // back frozen/non-interactive after a bfcache restore. `pageshow` with `persisted: true`
+  // is the one event that fires specifically on a bfcache restore, so we use it to force the
+  // PDF iframe to remount (fresh nested browsing context = a working PDF viewer again).
+  useEffect(() => {
+    const handlePageShow = (event) => {
+      if (event.persisted) {
+        setPdfViewerInstance((n) => n + 1);
+      }
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, []);
 
   if (!selectedMsn) {
     return (
@@ -192,6 +218,7 @@ export default function MsnDocumentList({
       }
       const data = await res.json();
       setPdfResult(data);
+      setPdfViewerInstance((n) => n + 1);
       console.log("pdf result", data);
     } catch (err) {
       console.error("Error fetching DIN PDF:", err);
@@ -413,6 +440,7 @@ export default function MsnDocumentList({
           </div>
 
           <iframe
+            key={pdfViewerInstance}
             src={pdfResult.dataUrl}
             width="100%"
             height="650px"
