@@ -873,10 +873,16 @@ export async function getProjectFolders() {
       const rawMsnList = folder.ListItemAllFields?.MSN_x0020_Number || '';
       // Pre-assigned MSN numbers for this project, so a brand-new project with zero
       // documents still lets a user pick an MSN to upload its first document against.
-      const AssignedMsnNumbers = rawMsnList
-        .split(',')
-        .map(msn => msn.trim())
-        .filter(Boolean);
+      // Each entry may carry a trailing "customer tag" (e.g. "VCE-FAB-0684/1 05Z002D")
+      // used only by the DIN flow's own SharePoint lookup — strip it here so this list's
+      // keys match the bare MSN number documents are actually tagged with, otherwise the
+      // same MSN shows up twice (once bare, once with its tag) in the sidebar.
+      const AssignedMsnNumbers = [...new Set(
+        rawMsnList
+          .split(',')
+          .map(msn => msn.trim().split(/\s+/)[0])
+          .filter(Boolean)
+      )];
       return {
         Name: folder.Name,
         ServerRelativeUrl: folder.ServerRelativeUrl,
