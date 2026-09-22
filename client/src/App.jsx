@@ -78,11 +78,13 @@ export default function App() {
     setGeneratedDinMsn(msnNumber);
     console.log("📌 Stored Selected MSN Number into variable (generatedDinMsn):", msnNumber);
 
-    // 1. Create DIN Request item in SharePoint (Status: Pending)
+    // 1. Create DIN Request item in SharePoint (Status: Pending). ProjectFolderUrl scopes
+    // the flow's document/folder lookups to this exact project, so two projects that
+    // happen to share the same bare MSN number never get their documents/history mixed.
     const response = await fetch(`${apiBase}/api/generate-din`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ msnNumber: msnNumber })
+      body: JSON.stringify({ msnNumber: msnNumber, folderUrl: selectedFolder?.ServerRelativeUrl || '' })
     });
 
     if (!response.ok) {

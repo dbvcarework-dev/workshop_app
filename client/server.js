@@ -139,15 +139,15 @@ const server = http.createServer(async (req, res) => {
     req.on('data', chunk => { body += chunk.toString(); });
     req.on('end', async () => {
       try {
-        const { msnNumber } = JSON.parse(body || '{}');
+        const { msnNumber, folderUrl } = JSON.parse(body || '{}');
         if (!msnNumber) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Missing msnNumber in request body' }));
           return;
         }
 
-        console.log(`🌐 Received POST /api/generate-din for MSN: "${msnNumber}"...`);
-        const result = await createDinRequest(msnNumber);
+        console.log(`🌐 Received POST /api/generate-din for MSN: "${msnNumber}" (folder: "${folderUrl || 'none'}")...`);
+        const result = await createDinRequest(msnNumber, folderUrl);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       } catch (err) {

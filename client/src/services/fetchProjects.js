@@ -409,7 +409,10 @@ export async function getFolderDocuments(folderPath) {
 }
 
 // Exported function to create a new item in SharePoint list "DIN Requests"
-export async function createDinRequest(msnNumber) {
+// folderUrl (the requesting project's ServerRelativeUrl) lets the flow scope every
+// lookup to this exact project, so two projects that happen to share the same bare
+// MSN number never get their documents or generation history mixed together.
+export async function createDinRequest(msnNumber, folderUrl) {
   validateConfig();
   const spScope = `https://${SHAREPOINT_DOMAIN}/AllSites.FullControl offline_access User.Read`;
   const accessToken = await getAccessToken(spScope);
@@ -427,6 +430,7 @@ export async function createDinRequest(msnNumber) {
     body: JSON.stringify({
       Title: msnNumber,
       Status: 'Pending',
+      ProjectFolderUrl: folderUrl || '',
     }),
   });
 
