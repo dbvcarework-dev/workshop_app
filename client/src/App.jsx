@@ -98,10 +98,14 @@ export default function App() {
     const itemId = data.Id;
     if (!itemId) return data;
 
-    // 2. Poll SharePoint item status every 3 seconds until Power Automate updates Status to "Completed"
+    // 2. Poll SharePoint item status every 3 seconds until Power Automate updates Status to "Completed".
+    // The flow's own trigger has up to ~60s of poll latency before it even starts, plus several
+    // minutes of run time (version-history expansion per document) — 180s used to be enough but
+    // now regularly isn't, which was silently showing the old PDF after a false "timeout". 600s
+    // gives real headroom above the flow's actual worst-case duration.
     return new Promise((resolve) => {
       let attempts = 0;
-      const maxAttempts = 60; // 60 * 3s = 180 seconds max timeout
+      const maxAttempts = 200; // 200 * 3s = 600 seconds max timeout
 
       const pollingInterval = setInterval(async () => {
         attempts++;

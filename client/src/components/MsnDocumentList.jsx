@@ -23,6 +23,9 @@ export default function MsnDocumentList({
   const [loadingPdf, setLoadingPdf] = useState(false);
   const [pdfError, setPdfError] = useState(null);
   const [generatingDin, setGeneratingDin] = useState(false);
+  // Distinct from pdfError (which means "the PDF fetch itself failed") — this means
+  // "the flow hasn't confirmed completion yet", so it needs its own, non-alarming wording.
+  const [dinTimeoutNotice, setDinTimeoutNotice] = useState(null);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [modifyModalOpen, setModifyModalOpen] = useState(false);
   const [sendDinModalOpen, setSendDinModalOpen] = useState(false);
@@ -193,12 +196,22 @@ export default function MsnDocumentList({
   const handleGenerateDin = async () => {
     if (onGenerateDin) {
       setGeneratingDin(true);
+      setPdfError(null);
+      setDinTimeoutNotice(null);
       try {
-        await onGenerateDin(selectedMsn);
-        // Automatically fetch & render the newly generated DIN PDF on screen!
-        await handleFetchLatestPdf(selectedMsn);
+        const result = await onGenerateDin(selectedMsn);
+        // Only refresh the viewer once the flow actually reports Completed — on a
+        // timeout, the new PDF may not exist yet, and silently re-fetching would just
+        // redisplay the same old PDF with no indication anything went wrong. Surface
+        // the timeout explicitly instead so the user knows to check back / retry.
+        if (result?.Status === 'Completed') {
+          await handleFetchLatestPdf(selectedMsn);
+        } else if (result?.Status === 'Timeout') {
+          setDinTimeoutNotice('DIN generation is taking longer than expected. It may still complete in the background — try "View Latest DIN PDF" again in a minute.');
+        }
       } catch (err) {
         console.error("Error generating DIN:", err);
+        setPdfError(err.message || 'Failed to generate DIN');
       } finally {
         setGeneratingDin(false);
       }
@@ -399,6 +412,14 @@ export default function MsnDocumentList({
             }} />
             Action Required
           </span>
+        </div>
+      )}
+
+      {/* Still-processing notice — flow hasn't confirmed completion within the wait window */}
+      {dinTimeoutNotice && (
+        <div className="error-alert" style={{ marginBottom: '18px', borderColor: '#f5c451', backgroundColor: '#fff8e6' }}>
+          <p style={{ margin: '0 0 4px 0', fontWeight: '600' }}>⏳ Still processing</p>
+          <p style={{ margin: 0, fontSize: '13px' }}>{dinTimeoutNotice}</p>
         </div>
       )}
 
