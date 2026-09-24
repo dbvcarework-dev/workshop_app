@@ -139,15 +139,24 @@ const server = http.createServer(async (req, res) => {
     req.on('data', chunk => { body += chunk.toString(); });
     req.on('end', async () => {
       try {
-        const { msnNumber, folderUrl } = JSON.parse(body || '{}');
+        const { msnNumber, folderUrl, issuedBy } = JSON.parse(body || '{}');
         if (!msnNumber) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Missing msnNumber in request body' }));
           return;
         }
 
-        console.log(`🌐 Received POST /api/generate-din for MSN: "${msnNumber}" (folder: "${folderUrl || 'none'}")...`);
-        const result = await createDinRequest(msnNumber, folderUrl);
+        // The name ends up inside a JSON body the flow builds by string concatenation and
+        // in the PDF's HTML, so only allow characters that are safe in both contexts.
+        const issuer = typeof issuedBy === 'string' ? issuedBy.trim() : '';
+        if (!/^[A-Za-z][A-Za-z .-]{0,39}$/.test(issuer)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Issued by must be 1-40 letters, spaces, dots or hyphens' }));
+          return;
+        }
+
+        console.log(`🌐 Received POST /api/generate-din for MSN: "${msnNumber}" (folder: "${folderUrl || 'none'}", issued by: "${issuer}")...`);
+        const result = await createDinRequest(msnNumber, folderUrl, issuer);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       } catch (err) {

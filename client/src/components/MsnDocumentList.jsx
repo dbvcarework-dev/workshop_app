@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import DocumentUploadModal from './DocumentUploadModal';
 import ModifyDocumentModal from './ModifyDocumentModal';
 import SendDinEmailModal from './SendDinEmailModal';
+import IssueDinModal from './IssueDinModal';
 
 const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
 
@@ -29,6 +30,7 @@ export default function MsnDocumentList({
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [modifyModalOpen, setModifyModalOpen] = useState(false);
   const [sendDinModalOpen, setSendDinModalOpen] = useState(false);
+  const [issueModalOpen, setIssueModalOpen] = useState(false);
 
   // Bumped every time a PDF is (re)loaded, and used as the iframe's `key`. Without this,
   // re-setting pdfResult to an equal-looking object (same dataUrl) doesn't change the
@@ -193,13 +195,14 @@ export default function MsnDocumentList({
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
 
-  const handleGenerateDin = async () => {
+  const handleGenerateDin = async (issuedBy) => {
+    setIssueModalOpen(false);
     if (onGenerateDin) {
       setGeneratingDin(true);
       setPdfError(null);
       setDinTimeoutNotice(null);
       try {
-        const result = await onGenerateDin(selectedMsn);
+        const result = await onGenerateDin(selectedMsn, issuedBy);
         // Only refresh the viewer once the flow actually reports Completed — on a
         // timeout, the new PDF may not exist yet, and silently re-fetching would just
         // redisplay the same old PDF with no indication anything went wrong. Surface
@@ -299,7 +302,7 @@ export default function MsnDocumentList({
         <button
           type="button"
           className="generate-din-btn"
-          onClick={handleGenerateDin}
+          onClick={() => setIssueModalOpen(true)}
           disabled={generatingDin || loadingPdf}
         >
           {generatingDin ? (
@@ -580,6 +583,15 @@ export default function MsnDocumentList({
       )}
 
     </main>
+
+      {/* Issued-by picker, shown before a DIN generation starts */}
+      {issueModalOpen && (
+        <IssueDinModal
+          selectedMsn={selectedMsn}
+          onClose={() => setIssueModalOpen(false)}
+          onConfirm={handleGenerateDin}
+        />
+      )}
 
       {/* Document Upload Modal */}
       {uploadModalOpen && (

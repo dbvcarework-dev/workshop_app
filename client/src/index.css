@@ -209,6 +209,38 @@ body {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  flex-shrink: 0;
+  transition: width 0.2s ease;
+}
+
+/* Collapsed state: a slim strip with just the expand toggle, so the PDF viewer
+   (flex: 1 on .content-panel) reclaims the freed width automatically. */
+.sidebar-panel.collapsed {
+  width: 36px;
+  overflow: hidden;
+}
+
+.sidebar-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 0.5px solid var(--border-color);
+  background-color: #ffffff;
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle-btn:hover {
+  background-color: var(--bg-main);
+  color: var(--text-main);
+}
+
+.sidebar-panel.collapsed .sidebar-toggle-btn {
+  margin: 8px auto 0 auto;
 }
 
 .panel-header {

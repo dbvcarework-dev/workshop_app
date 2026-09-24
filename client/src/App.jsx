@@ -37,6 +37,9 @@ function writeStateToUrl(folderName, msnNumber, { replace = false } = {}) {
 export default function App() {
   const [folders, setFolders] = useState([]);
   const [selectedFolder, setSelectedFolder] = useState(null);
+  // Collapses the project/MSN sidebar to a slim strip so the PDF viewer can use the
+  // freed width — purely a view preference, not persisted, so it resets on reload.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -74,7 +77,7 @@ export default function App() {
   // re-fetch the same documents a second time sequentially.
   const skipNextDocFetchRef = useRef(false);
 
-  const handleGenerateDin = async (msnNumber) => {
+  const handleGenerateDin = async (msnNumber, issuedBy) => {
     setGeneratedDinMsn(msnNumber);
     console.log("📌 Stored Selected MSN Number into variable (generatedDinMsn):", msnNumber);
 
@@ -84,7 +87,7 @@ export default function App() {
     const response = await fetch(`${apiBase}/api/generate-din`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ msnNumber: msnNumber, folderUrl: selectedFolder?.ServerRelativeUrl || '' })
+      body: JSON.stringify({ msnNumber: msnNumber, folderUrl: selectedFolder?.ServerRelativeUrl || '', issuedBy })
     });
 
     if (!response.ok) {
@@ -400,6 +403,8 @@ export default function App() {
           selectedMsn={selectedMsn}
           onSelectMsn={handleSelectMsn}
           searchQuery={searchQuery}
+          isCollapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
         />
 
         {/* Right Content Panel: Document Viewer */}
