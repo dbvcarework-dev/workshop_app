@@ -40,6 +40,12 @@ export default function MsnDocumentList({
   // see or reset. Forcing a fresh iframe element guarantees a clean nested browsing context.
   const [pdfViewerInstance, setPdfViewerInstance] = useState(0);
 
+  // Whether the viewer panel is shown — kept separate from pdfResult on purpose. pdfResult
+  // is also the app's record of the latest DIN (its timeCreated drives the "stale" / "no DIN
+  // yet" warnings and the Send DIN button), so "Close PDF" must only hide the viewer, not
+  // forget that a DIN exists.
+  const [pdfViewerOpen, setPdfViewerOpen] = useState(true);
+
   // Tracks which MSN's preloadedDin has already been consumed, so navigating away
   // and back to the same MSN triggers a fresh fetch instead of reusing a stale snapshot.
   const consumedPreloadMsnRef = useRef(null);
@@ -55,6 +61,7 @@ export default function MsnDocumentList({
       // use it instead of firing a redundant, sequential /api/din-pdf request.
       consumedPreloadMsnRef.current = selectedMsn;
       setPdfResult(preloadedDin.data);
+      setPdfViewerOpen(true);
       setPdfViewerInstance((n) => n + 1);
       return;
     }
@@ -234,6 +241,7 @@ export default function MsnDocumentList({
       }
       const data = await res.json();
       setPdfResult(data);
+      setPdfViewerOpen(true);
       setPdfViewerInstance((n) => n + 1);
       console.log("pdf result", data);
     } catch (err) {
@@ -435,7 +443,7 @@ export default function MsnDocumentList({
       )}
 
       {/* 4. Embedded Live PDF Document Viewer */}
-      {pdfResult && (
+      {pdfResult && pdfViewerOpen && (
         <div style={{
           marginBottom: '20px',
           backgroundColor: '#ffffff',
@@ -455,7 +463,7 @@ export default function MsnDocumentList({
               </p>
             </div>
             <button
-              onClick={() => setPdfResult(null)}
+              onClick={() => setPdfViewerOpen(false)}
               className="refresh-btn"
               style={{ padding: '4px 10px', fontSize: '12px' }}
             >
@@ -465,7 +473,10 @@ export default function MsnDocumentList({
 
           <iframe
             key={pdfViewerInstance}
-            src={pdfResult.dataUrl}
+            // view=FitH opens the page fitted to the viewer's width (Chrome/Edge viewer), and
+            // the viewer keeps re-fitting in that mode when its space changes — e.g. when the
+            // app sidebar or the viewer's own page-thumbnail panel is collapsed.
+            src={`${pdfResult.dataUrl}#view=FitH`}
             width="100%"
             height="650px"
             title="Latest DIN PDF Document"
