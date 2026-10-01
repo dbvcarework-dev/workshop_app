@@ -3,6 +3,7 @@ import DocumentUploadModal from './DocumentUploadModal';
 import ModifyDocumentModal from './ModifyDocumentModal';
 import SendDinEmailModal from './SendDinEmailModal';
 import IssueDinModal from './IssueDinModal';
+import { ensurePasscode } from '../services/passcode';
 
 const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
 
@@ -212,6 +213,16 @@ export default function MsnDocumentList({
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   };
 
+  // Write actions ask for the passcode up front; a cancelled prompt just doesn't open the dialog.
+  const openIfAllowed = async (open) => {
+    try {
+      await ensurePasscode();
+      open();
+    } catch (err) {
+      console.warn('Passcode not provided:', err.message);
+    }
+  };
+
   const handleGenerateDin = async (issuedBy) => {
     setIssueModalOpen(false);
     if (onGenerateDin) {
@@ -278,7 +289,7 @@ export default function MsnDocumentList({
         <button
           type="button"
           className="refresh-btn"
-          onClick={() => setUploadModalOpen(true)}
+          onClick={() => openIfAllowed(() => setUploadModalOpen(true))}
           title="Upload a new document to SharePoint"
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -292,7 +303,7 @@ export default function MsnDocumentList({
         <button
           type="button"
           className="refresh-btn"
-          onClick={() => setModifyModalOpen(true)}
+          onClick={() => openIfAllowed(() => setModifyModalOpen(true))}
           title="Update fields or replace the file of an already-uploaded document"
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -320,7 +331,7 @@ export default function MsnDocumentList({
         <button
           type="button"
           className="generate-din-btn"
-          onClick={() => setIssueModalOpen(true)}
+          onClick={() => openIfAllowed(() => setIssueModalOpen(true))}
           disabled={generatingDin || loadingPdf}
         >
           {generatingDin ? (
@@ -356,7 +367,7 @@ export default function MsnDocumentList({
           <button
             type="button"
             className="refresh-btn"
-            onClick={() => setSendDinModalOpen(true)}
+            onClick={() => openIfAllowed(() => setSendDinModalOpen(true))}
             title="Email the latest DIN to a department"
           >
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
