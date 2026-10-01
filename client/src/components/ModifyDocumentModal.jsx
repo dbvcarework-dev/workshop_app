@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { writeFetch } from '../services/passcode';
 
 const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
 
@@ -130,7 +131,7 @@ export default function ModifyDocumentModal({ selectedMsn, selectedFolder, docum
 
         if (entry.file) {
           const base64Data = await fileToBase64(entry.file);
-          const response = await fetch(`${apiBase}/api/upload-document`, {
+          const response = await writeFetch(`${apiBase}/api/upload-document`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -150,7 +151,7 @@ export default function ModifyDocumentModal({ selectedMsn, selectedFolder, docum
             throw new Error(errData.error || `HTTP ${response.status}`);
           }
         } else {
-          const response = await fetch(`${apiBase}/api/update-document-metadata`, {
+          const response = await writeFetch(`${apiBase}/api/update-document-metadata`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

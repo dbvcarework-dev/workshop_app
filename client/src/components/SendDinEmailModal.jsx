@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { writeFetch } from '../services/passcode';
 
 const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
 
@@ -108,7 +109,7 @@ export default function SendDinEmailModal({ selectedMsn, folderUrl, onClose }) {
     setStatusMessage('Creating email request...');
 
     try {
-      const response = await fetch(`${apiBase}/api/send-din-email`, {
+      const response = await writeFetch(`${apiBase}/api/send-din-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ msnNumber: selectedMsn, documentTypes: selectedDocTypes, folderUrl }),

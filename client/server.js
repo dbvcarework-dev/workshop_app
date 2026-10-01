@@ -1,13 +1,28 @@
 import http from 'http';
+import { createHash, timingSafeEqual } from 'crypto';
 import { getProjectFolders, getFolderDocuments, getRestoreState, createDinRequest, getLatestDinPdfDataUrl, getDinRequestStatus, uploadDocumentToSharePoint, updateDocumentMetadata, getDocumentTypeDepartments, createDinEmailRequest, getDinEmailRequestStatus, getLatestDinColumn } from './src/services/fetchProjects.js';
 
 const PORT = 5000;
+
+const WRITE_PATHS = new Set([
+  '/api/generate-din',
+  '/api/send-din-email',
+  '/api/upload-document',
+  '/api/update-document-metadata',
+]);
+
+const passcodeMatches = (given, expected) => {
+  if (typeof given !== 'string') return false;
+  const a = createHash('sha256').update(given).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
+};
 
 const server = http.createServer(async (req, res) => {
   // Set CORS headers for React frontend
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Passcode');
 
   // Handle preflight OPTIONS request
   if (req.method === 'OPTIONS') {
@@ -17,6 +32,26 @@ const server = http.createServer(async (req, res) => {
   }
 
   const parsedUrl = new URL(req.url, `http://localhost:${PORT}`);
+
+  // Write actions (add/modify document, generate DIN, send DIN) need the shared passcode.
+  if (req.method === 'POST' && (WRITE_PATHS.has(parsedUrl.pathname) || parsedUrl.pathname === '/api/verify-passcode')) {
+    const expected = process.env.WRITE_PASSCODE;
+    if (!expected) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'WRITE_PASSCODE is not configured on the server.' }));
+      return;
+    }
+    if (!passcodeMatches(req.headers['x-passcode'], expected)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid or missing passcode.' }));
+      return;
+    }
+    if (parsedUrl.pathname === '/api/verify-passcode') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+  }
 
   // API endpoint: GET /api/projects
   if (parsedUrl.pathname === '/api/projects' && req.method === 'GET') {

@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { writeFetch } from '../services/passcode';
 
 // Use current host so uploads target the backend on the server machine
 const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
@@ -98,7 +99,7 @@ export default function DocumentUploadModal({ selectedMsn, selectedFolder, minIs
   const uploadOneDocument = async (doc) => {
     const base64Data = await fileToBase64(doc.file);
 
-    const response = await fetch(`${apiBase}/api/upload-document`, {
+    const response = await writeFetch(`${apiBase}/api/upload-document`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

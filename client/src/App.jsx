@@ -3,6 +3,7 @@ import Header from './components/Header.jsx';
 import ProjectSelector from './components/ProjectSelector.jsx';
 import MsnDocumentList from './components/MsnDocumentList.jsx';
 import './index.css';
+import { writeFetch } from './services/passcode';
 
 // Use the current page host so colleagues can access backend via host IP
 const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
@@ -84,7 +85,7 @@ export default function App() {
     // 1. Create DIN Request item in SharePoint (Status: Pending). ProjectFolderUrl scopes
     // the flow's document/folder lookups to this exact project, so two projects that
     // happen to share the same bare MSN number never get their documents/history mixed.
-    const response = await fetch(`${apiBase}/api/generate-din`, {
+    const response = await writeFetch(`${apiBase}/api/generate-din`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ msnNumber: msnNumber, folderUrl: selectedFolder?.ServerRelativeUrl || '', issuedBy })
