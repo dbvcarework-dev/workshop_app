@@ -1,5 +1,5 @@
 import http from 'http';
-import { getProjectFolders, getFolderDocuments, getRestoreState, createDinRequest, getLatestDinPdfDataUrl, getDinRequestStatus, uploadDocumentToSharePoint, updateDocumentMetadata, getDocumentTypeDepartments, createDinEmailRequest, getDinEmailRequestStatus } from './src/services/fetchProjects.js';
+import { getProjectFolders, getFolderDocuments, getRestoreState, createDinRequest, getLatestDinPdfDataUrl, getDinRequestStatus, uploadDocumentToSharePoint, updateDocumentMetadata, getDocumentTypeDepartments, createDinEmailRequest, getDinEmailRequestStatus, getLatestDinColumn } from './src/services/fetchProjects.js';
 
 const PORT = 5000;
 
@@ -178,13 +178,32 @@ const server = http.createServer(async (req, res) => {
       res.end(JSON.stringify({ error: err.message }));
     }
   }
+  // API endpoint: GET /api/latest-din-column?msnNumber=...&folderUrl=...
+  else if (parsedUrl.pathname === '/api/latest-din-column' && req.method === 'GET') {
+    const msnNumber = parsedUrl.searchParams.get('msnNumber');
+    const folderUrl = parsedUrl.searchParams.get('folderUrl') || '';
+    if (!msnNumber) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Missing msnNumber query parameter' }));
+      return;
+    }
+    try {
+      const column = await getLatestDinColumn(msnNumber, folderUrl);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(column));
+    } catch (err) {
+      console.error('❌ Latest DIN Column API Error:', err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  }
   // API endpoint: POST /api/send-din-email
   else if (parsedUrl.pathname === '/api/send-din-email' && req.method === 'POST') {
     let body = '';
     req.on('data', chunk => { body += chunk.toString(); });
     req.on('end', async () => {
       try {
-        const { msnNumber, documentTypes } = JSON.parse(body || '{}');
+        const { msnNumber, documentTypes, folderUrl } = JSON.parse(body || '{}');
         if (!msnNumber || !Array.isArray(documentTypes) || documentTypes.length === 0) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: 'Missing msnNumber or documentTypes in request body' }));
@@ -192,7 +211,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         console.log(`🌐 Received POST /api/send-din-email for MSN "${msnNumber}" -> document types [${documentTypes.join(', ')}]...`);
-        const result = await createDinEmailRequest(msnNumber, documentTypes);
+        const result = await createDinEmailRequest(msnNumber, documentTypes, folderUrl);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result));
       } catch (err) {

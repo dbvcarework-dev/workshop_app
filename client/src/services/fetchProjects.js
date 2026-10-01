@@ -612,13 +612,24 @@ export async function getDocumentTypeDepartments() {
   }));
 }
 
-// Internal helper: resolve the union of email addresses for a set of selected document types
-// by reading the "Email_x0020_To" column of matching rows in the lookup list.
+// Split a cell from the lookup list into clean addresses. Cells may hold one address or a
+// group of them separated by commas (semicolons / line breaks are tolerated too).
+function parseEmailCell(value) {
+  return String(value || '')
+    .split(/[,;\r\n]+/)
+    .map(e => e.trim().toLowerCase())
+    .filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e));
+}
+
+// Internal helper: resolve the To and CC address sets for the selected document types from the
+// "Email_x0020_To" / "Email_x0020_CC" columns of the lookup list. Addresses are compared
+// case-insensitively so selecting several types never yields the same person twice, and anyone
+// already in To is dropped from CC.
 async function resolveEmailsForDocumentTypes(documentTypes) {
   const spScope = `https://${SHAREPOINT_DOMAIN}/AllSites.FullControl offline_access User.Read`;
   const accessToken = await getAccessToken(spScope);
 
-  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/lists/getByTitle('Users and department configurations')/items?$select=Document_x0020_Type,Department,Email_x0020_To`;
+  const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/lists/getByTitle('Users and department configurations')/items?$select=Document_x0020_Type,Department,Email_x0020_To,Email_x0020_CC`;
 
   const spRes = await fetch(endpoint, {
     method: 'GET',
@@ -636,43 +647,154 @@ async function resolveEmailsForDocumentTypes(documentTypes) {
   const spData = await spRes.json();
   const matchingRows = (spData.value || []).filter(item => documentTypes.includes(item.Document_x0020_Type));
 
-  const emailSet = new Set();
+  const toSet = new Set();
+  const ccSet = new Set();
   const departments = new Set();
   for (const row of matchingRows) {
     // Department is a multi-value field in this list — normalize to an array either way
     const rowDepartments = Array.isArray(row.Department) ? row.Department : [row.Department];
     rowDepartments.filter(Boolean).forEach(dep => departments.add(dep));
-    String(row.Email_x0020_To || '')
-      .split(',')
-      .map(e => e.trim())
-      .filter(Boolean)
-      .forEach(e => emailSet.add(e));
+    parseEmailCell(row.Email_x0020_To).forEach(e => toSet.add(e));
+    parseEmailCell(row.Email_x0020_CC).forEach(e => ccSet.add(e));
+  }
+  toSet.forEach(e => ccSet.delete(e));
+
+  return { emails: [...toSet], ccEmails: [...ccSet], departments: [...departments] };
+}
+
+// Per-document version snapshots for getLatestDinColumn, keyed by "<item Id>|<Modified>"
+const versionPointsCache = new Map();
+
+// Work out what the latest generated DIN PDF shows in its newest issue column, using the same
+// rules as the "DIN Generation (By date)" flow: every document version that changed revision is a
+// snapshot; its column is (generation epoch, IST issue date), where the epoch is the number of
+// DIN_Generation_Log rows at or before the version's Created time and the issue date is
+// coalesce(CustomDate, Created). Versions created after the latest logged generation are not in
+// the PDF yet, so they are ignored. Returns null when no DIN was ever generated for this MSN.
+export async function getLatestDinColumn(msnNumber, folderUrl) {
+  validateConfig();
+  const spScope = `https://${SHAREPOINT_DOMAIN}/AllSites.FullControl offline_access User.Read`;
+  const accessToken = await getAccessToken(spScope);
+  const headers = { Authorization: `Bearer ${accessToken}`, Accept: 'application/json;odata=nometadata' };
+  const quote = v => String(v).replace(/'/g, "''");
+  const getJson = async (url) => {
+    const res = await fetch(url, { headers });
+    if (!res.ok) throw new Error(`SharePoint API HTTP ${res.status}: ${await res.text()}`);
+    return res.json();
+  };
+
+  const logFilter = `MSNNumber eq '${quote(msnNumber)}' and ProjectFolderUrl eq '${quote(folderUrl || '')}'`;
+  const docFilter = `FSObjType eq 0 and MSN_x0020_Number eq '${quote(msnNumber)}'` + (folderUrl ? ` and FileDirRef eq '${quote(folderUrl)}'` : '');
+  // The generation log and the document list don't depend on each other, so fetch them together
+  const [log, docsRes] = await Promise.all([
+    getJson(`${SHAREPOINT_SITE_URL}/_api/web/lists/getByTitle('DIN_Generation_Log')/items?$filter=${encodeURIComponent(logFilter)}&$select=GeneratedUtc&$orderby=GeneratedUtc asc&$top=5000`),
+    getJson(`${SHAREPOINT_SITE_URL}/_api/web/lists/getByTitle('Workshop files')/items?$filter=${encodeURIComponent(docFilter)}&$select=Id,Modified,Document_x0020_Number,Document_x0020_Type,CustomDate,Created,Record_x0020_of_x0020_revisions&$top=5000`),
+  ]);
+  const boundaries = (log.value || []).map(r => new Date(r.GeneratedUtc).getTime()).sort((x, y) => x - y);
+  if (boundaries.length === 0) return null;
+  const lastBoundary = boundaries[boundaries.length - 1];
+  const docs = docsRes.value || [];
+
+  // Version history (field names come back double-escaped). A document's history only changes when
+  // the document is modified, so it is cached by Id + Modified; only new/changed documents are
+  // fetched, and those in parallel.
+  const snapshots = [];
+  const IST_MS = 5.5 * 3600 * 1000;
+  const collect = async (doc) => {
+    const cacheKey = `${doc.Id}|${doc.Modified}`;
+    let points = versionPointsCache.get(cacheKey);
+    if (!points) {
+      const v = await getJson(`${SHAREPOINT_SITE_URL}/_api/web/lists/getByTitle('Workshop files')/items(${doc.Id})/versions`);
+      const versions = v.d?.results || v.value || [];
+      points = versions.length
+        ? versions.map(x => ({ rev: x.Record_x005f_x0020_x005f_of_x005f_x0020_x005f_revisions, created: x.Created, custom: x.CustomDate }))
+        : [{ rev: doc.Record_x0020_of_x0020_revisions, created: doc.Created, custom: doc.CustomDate }];
+      versionPointsCache.set(cacheKey, points);
+    }
+    let last = null;
+    for (const p of [...points].reverse()) { // API lists newest first; walk oldest first
+      if (p.rev === last) continue;
+      last = p.rev;
+      const createdMs = new Date(p.created).getTime();
+      if (createdMs > lastBoundary) continue;
+      const epoch = boundaries.filter(b => b <= createdMs).length;
+      const ist = new Date(new Date(p.custom || p.created).getTime() + IST_MS);
+      const yyyy = ist.getUTCFullYear();
+      const mm = String(ist.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(ist.getUTCDate()).padStart(2, '0');
+      snapshots.push({
+        docNumber: doc.Document_x0020_Number || '',
+        docType: doc.Document_x0020_Type || '',
+        revision: p.rev || '',
+        label: `${dd}-${mm}-${yyyy}`,
+        epoch,
+        sortKey: epoch * 1e8 + Number(`${yyyy}${mm}${dd}`),
+      });
+    }
+  };
+  for (let i = 0; i < docs.length; i += 20) {
+    await Promise.all(docs.slice(i, i + 20).map(collect));
+  }
+  if (snapshots.length === 0) return null;
+
+  // Columns in the flow's order: epoch-primary, then date; a document that lands twice on the same
+  // date/epoch spills into a "#n" column of its own.
+  snapshots.sort((x, y) => x.sortKey - y.sortKey);
+  const perDocDate = new Map();
+  const columns = [];
+  for (const snap of snapshots) {
+    const base = `${snap.label}~E${snap.epoch}`;
+    const counterKey = `${snap.docNumber}|${base}`;
+    const n = (perDocDate.get(counterKey) || 0) + 1;
+    perDocDate.set(counterKey, n);
+    snap.key = n === 1 ? base : `${base}#${n}`;
+    if (!columns.includes(snap.key)) columns.push(snap.key);
   }
 
-  return { emails: [...emailSet], departments: [...departments] };
+  const latestKey = columns[columns.length - 1];
+  const inLatest = snapshots.filter(s => s.key === latestKey);
+  return {
+    columnNumber: columns.length,
+    label: inLatest[0].label,
+    documents: inLatest
+      .map(({ docNumber, docType, revision }) => ({ docNumber, docType, revision }))
+      .sort((x, y) => x.docType.localeCompare(y.docType) || x.docNumber.localeCompare(y.docNumber)),
+  };
 }
 
 // Exported function to create a new item in SharePoint list "DIN Email Requests".
 // A Standard "When an item is created" flow trigger on this list does the actual
 // SharePoint lookup + Office 365 Outlook send (no Premium HTTP trigger needed).
-export async function createDinEmailRequest(msnNumber, documentTypes) {
+// The flow reads the To / CC addresses itself from the config list for DocumentTypes (we only
+// resolve them here to fail fast when none are configured). folderUrl lets the flow read the project folder's Document No / PO No / Client Name for the
+// subject; the latest-column document list and column number come from the generated DIN.
+export async function createDinEmailRequest(msnNumber, documentTypes, folderUrl) {
   validateConfig();
 
   if (!Array.isArray(documentTypes) || documentTypes.length === 0) {
     throw new Error('At least one document type must be selected');
   }
+  if (!folderUrl) {
+    throw new Error('Project folder is required to build the email subject');
+  }
 
-  const { emails, departments } = await resolveEmailsForDocumentTypes(documentTypes);
+  const { emails, ccEmails, departments } = await resolveEmailsForDocumentTypes(documentTypes);
   if (emails.length === 0) {
     throw new Error('No email addresses found for the selected document type(s)');
   }
+
+  const latest = await getLatestDinColumn(msnNumber, folderUrl);
+  if (!latest) {
+    throw new Error('No DIN has been generated for this MSN yet');
+  }
+  const issuedDocs = latest.documents.filter(d => documentTypes.includes(d.docType));
 
   const spScope = `https://${SHAREPOINT_DOMAIN}/AllSites.FullControl offline_access User.Read`;
   const accessToken = await getAccessToken(spScope);
 
   const endpoint = `${SHAREPOINT_SITE_URL}/_api/web/lists/getByTitle('DIN Email Requests')/items`;
 
-  console.log(`🌐 [Backend API] Creating DIN Email Request for MSN "${msnNumber}" -> ${departments.join(', ')} (${emails.join(', ')})...`);
+  console.log(`🌐 [Backend API] Creating DIN Email Request for MSN "${msnNumber}" -> ${departments.join(', ')} (to: ${emails.join(', ')}; cc: ${ccEmails.join(', ') || 'none'}; issue column ${latest.columnNumber}, ${issuedDocs.length} document(s))...`);
   const spRes = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -682,8 +804,10 @@ export async function createDinEmailRequest(msnNumber, documentTypes) {
     },
     body: JSON.stringify({
       Title: msnNumber,
-      Recipients: emails.join('; '),
       DocumentTypes: documentTypes.join(', '),
+      ProjectFolderUrl: folderUrl,
+      IssueColumnNo: String(latest.columnNumber),
+      IssuedDocuments: issuedDocs.map(d => `${d.docNumber} | ${d.revision || '-'} | ${d.docType}`).join('\n'),
       Status: 'Pending',
     }),
   });
@@ -694,7 +818,7 @@ export async function createDinEmailRequest(msnNumber, documentTypes) {
   }
 
   const itemData = await spRes.json();
-  return { itemId: itemData.Id, departments, emails };
+  return { itemId: itemData.Id, departments, emails, ccEmails };
 }
 
 // Exported function to check status of a DIN Email Request item in SharePoint

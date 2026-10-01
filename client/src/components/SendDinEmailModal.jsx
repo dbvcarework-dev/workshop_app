@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const apiBase = `${window.location.protocol}//${window.location.hostname}:5000`;
 
-export default function SendDinEmailModal({ selectedMsn, onClose }) {
+export default function SendDinEmailModal({ selectedMsn, folderUrl, onClose }) {
   const [rows, setRows] = useState([]); // [{ docType, department }]
   const [loadingRows, setLoadingRows] = useState(true);
   const [selectedDocTypes, setSelectedDocTypes] = useState([]);
@@ -10,6 +10,7 @@ export default function SendDinEmailModal({ selectedMsn, onClose }) {
   const [statusMessage, setStatusMessage] = useState('');
   const [sendError, setSendError] = useState(null);
   const [sent, setSent] = useState(false);
+  const [latestColumn, setLatestColumn] = useState(null); // { columnNumber, label, documents } of the latest DIN
 
   useEffect(() => {
     (async () => {
@@ -27,11 +28,41 @@ export default function SendDinEmailModal({ selectedMsn, onClose }) {
     })();
   }, []);
 
+  // The DIN's newest issue column, computed server-side with the flow's own column rules so this
+  // preview matches the document list that goes into the email.
+  useEffect(() => {
+    (async () => {
+      try {
+        const params = new URLSearchParams({ msnNumber: selectedMsn, folderUrl: folderUrl || '' });
+        const res = await fetch(`${apiBase}/api/latest-din-column?${params}`);
+        if (res.ok) setLatestColumn(await res.json());
+      } catch (err) {
+        console.error('❌ Failed to load latest DIN column:', err);
+      }
+    })();
+  }, [selectedMsn, folderUrl]);
+
+  // Once the type list and the latest column have both loaded, tick the types that have documents
+  // in that column (only once, so it never overrides the user's own choices).
+  const defaultsAppliedRef = useRef(false);
+  useEffect(() => {
+    if (defaultsAppliedRef.current || !latestColumn || rows.length === 0) return;
+    defaultsAppliedRef.current = true;
+    const typesInColumn = new Set(latestColumn.documents.map((doc) => doc.docType));
+    const preselected = rows.map((row) => row.docType).filter((docType) => typesInColumn.has(docType));
+    setSelectedDocTypes((prev) => (prev.length > 0 ? prev : preselected));
+  }, [latestColumn, rows]);
+
   const toggleDocType = (docType) => {
     setSelectedDocTypes((prev) =>
       prev.includes(docType) ? prev.filter((t) => t !== docType) : [...prev, docType]
     );
   };
+
+  // Documents of the latest column that this email will list (all of them until types are picked)
+  const shownDocs = (latestColumn?.documents || []).filter(
+    (doc) => selectedDocTypes.length === 0 || selectedDocTypes.includes(doc.docType)
+  );
 
   const pollForCompletion = (itemId) => {
     return new Promise((resolve) => {
@@ -80,7 +111,7 @@ export default function SendDinEmailModal({ selectedMsn, onClose }) {
       const response = await fetch(`${apiBase}/api/send-din-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ msnNumber: selectedMsn, documentTypes: selectedDocTypes }),
+        body: JSON.stringify({ msnNumber: selectedMsn, documentTypes: selectedDocTypes, folderUrl }),
       });
 
       if (!response.ok) {
@@ -221,6 +252,28 @@ export default function SendDinEmailModal({ selectedMsn, onClose }) {
                         </span>
                       </label>
                     ))}
+                  </div>
+                )}
+
+                {latestColumn && shownDocs.length > 0 && (
+                  <div style={{ marginTop: '16px' }}>
+                    <label className="modal-field-label">
+                      Issue column {latestColumn.columnNumber} ({latestColumn.label}) · {shownDocs.length} document{shownDocs.length === 1 ? '' : 's'}
+                      {selectedDocTypes.length > 0 ? ' in this email' : ''}
+                    </label>
+                    <div style={{
+                      maxHeight: '160px', overflowY: 'auto', border: '1px solid var(--border-color, #e5e7eb)',
+                      borderRadius: '6px', padding: '6px 10px', fontSize: '12px'
+                    }}>
+                      {shownDocs.map((doc, i) => (
+                        <div key={i} style={{ padding: '3px 0', display: 'flex', gap: '8px', justifyContent: 'space-between' }}>
+                          <span>{doc.docNumber}</span>
+                          <span style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                            {doc.docType || '—'} · {doc.revision || '—'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

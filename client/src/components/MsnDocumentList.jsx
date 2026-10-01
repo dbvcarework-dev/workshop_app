@@ -89,6 +89,16 @@ export default function MsnDocumentList({
     return () => window.removeEventListener('pageshow', handlePageShow);
   }, []);
 
+  // Warm the backend's cache of the DIN's latest column in the background, so the Send DIN dialog
+  // opens with its document list already available. The result is deliberately ignored.
+  const warmFolderUrl = selectedFolder?.ServerRelativeUrl || '';
+  const warmDinTime = pdfResult?.timeCreated || null;
+  useEffect(() => {
+    if (!selectedMsn || !warmDinTime) return;
+    const params = new URLSearchParams({ msnNumber: selectedMsn, folderUrl: warmFolderUrl });
+    fetch(`${apiBase}/api/latest-din-column?${params}`).catch(() => {});
+  }, [selectedMsn, warmFolderUrl, warmDinTime]);
+
   if (!selectedMsn) {
     return (
       <main className="content-panel">
@@ -631,6 +641,7 @@ export default function MsnDocumentList({
       {sendDinModalOpen && (
         <SendDinEmailModal
           selectedMsn={selectedMsn}
+          folderUrl={selectedFolder?.ServerRelativeUrl || ''}
           onClose={() => setSendDinModalOpen(false)}
         />
       )}
